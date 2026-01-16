@@ -19,9 +19,10 @@ module fpnew_opgroup_block #(
   parameter int unsigned                Width         = 32,
   parameter logic                       EnableVectors  = 1'b1,
   parameter fpnew_pkg::divsqrt_unit_t   DivSqrtSel     = fpnew_pkg::THMULTI,
-  parameter logic                       EnableCastPipe = 1'b0,
-  parameter logic                       EnableFmaPipe  = 1'b0,
-  parameter fpnew_pkg::fmt_logic_t      FpFmtMask      = '1,
+  parameter logic                       EnableCastPipe    = 1'b0,
+  parameter logic                       EnableFmaExpPipe  = 1'b0,
+  parameter logic                       EnableFmaNormPipe = 1'b0,
+  parameter fpnew_pkg::fmt_logic_t      FpFmtMask         = '1,
   parameter fpnew_pkg::ifmt_logic_t     IntFmtMask    = '1,
   parameter fpnew_pkg::fmt_unsigned_t   FmtPipeRegs   = '{default: 0},
   parameter fpnew_pkg::fmt_unit_types_t FmtUnitTypes  = '{default: fpnew_pkg::PARALLEL},
@@ -108,15 +109,16 @@ module fpnew_opgroup_block #(
       always_comb for (int b = 0; b < INTERNAL_LANES; b++) mask_slice[b] = simd_mask_i[(NUM_LANES/INTERNAL_LANES)*b];
 
       fpnew_opgroup_fmt_slice #(
-        .OpGroup       ( OpGroup          ),
-        .FpFormat      ( FpFormat         ),
-        .Width         ( Width            ),
-        .EnableVectors ( EnableVectors    ),
-        .NumPipeRegs   ( FmtPipeRegs[fmt] ),
-        .PipeConfig    ( PipeConfig       ),
-        .EnableFmaPipe ( EnableFmaPipe    ),
-        .TagType       ( TagType          ),
-        .TrueSIMDClass ( TrueSIMDClass    )
+        .OpGroup           ( OpGroup           ),
+        .FpFormat          ( FpFormat          ),
+        .Width             ( Width             ),
+        .EnableVectors     ( EnableVectors     ),
+        .NumPipeRegs       ( FmtPipeRegs[fmt]  ),
+        .PipeConfig        ( PipeConfig        ),
+        .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
+        .EnableFmaNormPipe ( EnableFmaNormPipe ),
+        .TagType           ( TagType           ),
+        .TrueSIMDClass     ( TrueSIMDClass     )
       ) i_fmt_slice (
         .clk_i,
         .rst_ni,
@@ -183,17 +185,17 @@ module fpnew_opgroup_block #(
     assign in_valid = in_valid_i & (FmtUnitTypes[dst_fmt_i] == fpnew_pkg::MERGED);
 
     fpnew_opgroup_multifmt_slice #(
-      .OpGroup        ( OpGroup        ),
-      .Width          ( Width          ),
-      .FpFmtConfig    ( FpFmtMask      ),
-      .IntFmtConfig   ( IntFmtMask     ),
-      .EnableVectors  ( EnableVectors  ),
-      .DivSqrtSel     ( DivSqrtSel     ),
-      .EnableCastPipe ( EnableCastPipe ),
-      .EnableFmaPipe  ( EnableFmaPipe  ),
-      .NumPipeRegs    ( REG            ),
-      .PipeConfig     ( PipeConfig     ),
-      .TagType        ( TagType        )
+      .OpGroup          ( OpGroup          ),
+      .Width            ( Width            ),
+      .FpFmtConfig      ( FpFmtMask        ),
+      .IntFmtConfig     ( IntFmtMask       ),
+      .EnableVectors    ( EnableVectors    ),
+      .DivSqrtSel       ( DivSqrtSel       ),
+      .EnableCastPipe   ( EnableCastPipe   ),
+      .EnableFmaNormPipe( EnableFmaNormPipe),
+      .NumPipeRegs      ( REG              ),
+      .PipeConfig       ( PipeConfig       ),
+      .TagType          ( TagType          )
     ) i_multifmt_slice (
       .clk_i,
       .rst_ni,

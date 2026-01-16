@@ -20,10 +20,12 @@ module fpnew_top #(
   // DivSqrtSel chooses among PULP, TH32, or THMULTI (see documentation and fpnew_pkg.sv for further details)
   parameter fpnew_pkg::divsqrt_unit_t       DivSqrtSel     = fpnew_pkg::THMULTI,
   // Enable pipeline between shifter and rounding in cast operation
-  parameter logic                           EnableCastPipe = 1'b0,
+  parameter logic                           EnableCastPipe    = 1'b0,
+  // Enable pipeline between exponent calculation and addend shift in FMA operation
+  parameter logic                           EnableFmaExpPipe  = 1'b0,
   // Enable pipeline between norm shift and rounding in FMA operation
-  parameter logic                           EnableFmaPipe  = 1'b0,
-  parameter type                            TagType        = logic,
+  parameter logic                           EnableFmaNormPipe = 1'b0,
+  parameter type                            TagType           = logic,
   parameter int unsigned                    TrueSIMDClass  = 0,
   parameter int unsigned                    EnableSIMDMask = 0,
   // Do not change
@@ -129,19 +131,20 @@ module fpnew_top #(
     end
 
     fpnew_opgroup_block #(
-      .OpGroup        ( OpGroup        ),
-      .Width          ( WIDTH          ),
-      .EnableVectors  ( EnableVectors  ),
-      .DivSqrtSel     ( DivSqrtSel     ),
-      .EnableCastPipe ( EnableCastPipe ),
-      .EnableFmaPipe  ( EnableFmaPipe  ),
-      .FpFmtMask      ( FpFmtMask      ),
-      .IntFmtMask     ( IntFmtMask     ),
-      .FmtPipeRegs    ( FmtPipeRegs    ),
-      .FmtUnitTypes   ( FmtUnitTypes   ),
-      .PipeConfig     ( PipeConfig     ),
-      .TagType        ( TagType        ),
-      .TrueSIMDClass  ( TrueSIMDClass  )
+      .OpGroup           ( OpGroup           ),
+      .Width             ( WIDTH             ),
+      .EnableVectors     ( EnableVectors     ),
+      .DivSqrtSel        ( DivSqrtSel        ),
+      .EnableCastPipe    ( EnableCastPipe    ),
+      .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
+      .EnableFmaNormPipe ( EnableFmaNormPipe ),
+      .FpFmtMask         ( FpFmtMask         ),
+      .IntFmtMask        ( IntFmtMask        ),
+      .FmtPipeRegs       ( FmtPipeRegs       ),
+      .FmtUnitTypes      ( FmtUnitTypes      ),
+      .PipeConfig        ( PipeConfig        ),
+      .TagType           ( TagType           ),
+      .TrueSIMDClass     ( TrueSIMDClass     )
     ) i_opgroup_block (
       .clk_i,
       .rst_ni,

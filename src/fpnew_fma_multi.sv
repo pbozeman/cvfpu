@@ -18,7 +18,7 @@
 module fpnew_fma_multi #(
   parameter fpnew_pkg::fmt_logic_t   FpFmtConfig   = '1,
   parameter int unsigned             NumPipeRegs   = 0,
-  parameter logic                    EnableFmaPipe = 1'b0,
+  parameter logic                    EnableFmaNormPipe = 1'b0,
   parameter fpnew_pkg::pipe_config_t PipeConfig    = fpnew_pkg::BEFORE,
   parameter type                     TagType       = logic,
   parameter type                     AuxType       = logic,
@@ -709,7 +709,7 @@ module fpnew_fma_multi #(
   end
 
   // ---------------
-  // Norm pipeline (optional, controlled by EnableFmaPipe)
+  // Norm pipeline (optional, controlled by EnableFmaNormPipe)
   // ---------------
   // Pipeline output signals as non-arrays
   logic [PRECISION_BITS:0]     final_mantissa_q;
@@ -725,23 +725,23 @@ module fpnew_fma_multi #(
   fpnew_pkg::status_t          special_status_q2;
 
   // Internal pipeline signals, index i holds signal after i register stages
-  logic                  [0:EnableFmaPipe][PRECISION_BITS:0]     norm_pipe_final_mant_q;
-  logic                  [0:EnableFmaPipe][2*PRECISION_BITS+2:0] norm_pipe_sum_sticky_q;
-  logic signed           [0:EnableFmaPipe][EXP_WIDTH-1:0]        norm_pipe_final_exp_q;
-  logic                  [0:EnableFmaPipe]                       norm_pipe_final_sign_q;
-  logic                  [0:EnableFmaPipe]                       norm_pipe_sticky_q;
-  logic                  [0:EnableFmaPipe]                       norm_pipe_eff_sub_q;
-  fpnew_pkg::fp_format_e [0:EnableFmaPipe]                       norm_pipe_dst_fmt_q;
-  fpnew_pkg::roundmode_e [0:EnableFmaPipe]                       norm_pipe_rnd_mode_q;
-  logic                  [0:EnableFmaPipe]                       norm_pipe_res_is_spec_q;
-  fp_t                   [0:EnableFmaPipe]                       norm_pipe_spec_res_q;
-  fpnew_pkg::status_t    [0:EnableFmaPipe]                       norm_pipe_spec_stat_q;
-  TagType                [0:EnableFmaPipe]                       norm_pipe_tag_q;
-  logic                  [0:EnableFmaPipe]                       norm_pipe_mask_q;
-  AuxType                [0:EnableFmaPipe]                       norm_pipe_aux_q;
-  logic                  [0:EnableFmaPipe]                       norm_pipe_valid_q;
+  logic                  [0:EnableFmaNormPipe][PRECISION_BITS:0]     norm_pipe_final_mant_q;
+  logic                  [0:EnableFmaNormPipe][2*PRECISION_BITS+2:0] norm_pipe_sum_sticky_q;
+  logic signed           [0:EnableFmaNormPipe][EXP_WIDTH-1:0]        norm_pipe_final_exp_q;
+  logic                  [0:EnableFmaNormPipe]                       norm_pipe_final_sign_q;
+  logic                  [0:EnableFmaNormPipe]                       norm_pipe_sticky_q;
+  logic                  [0:EnableFmaNormPipe]                       norm_pipe_eff_sub_q;
+  fpnew_pkg::fp_format_e [0:EnableFmaNormPipe]                       norm_pipe_dst_fmt_q;
+  fpnew_pkg::roundmode_e [0:EnableFmaNormPipe]                       norm_pipe_rnd_mode_q;
+  logic                  [0:EnableFmaNormPipe]                       norm_pipe_res_is_spec_q;
+  fp_t                   [0:EnableFmaNormPipe]                       norm_pipe_spec_res_q;
+  fpnew_pkg::status_t    [0:EnableFmaNormPipe]                       norm_pipe_spec_stat_q;
+  TagType                [0:EnableFmaNormPipe]                       norm_pipe_tag_q;
+  logic                  [0:EnableFmaNormPipe]                       norm_pipe_mask_q;
+  AuxType                [0:EnableFmaNormPipe]                       norm_pipe_aux_q;
+  logic                  [0:EnableFmaNormPipe]                       norm_pipe_valid_q;
   // Ready signal is combinatorial for all stages
-  logic [0:EnableFmaPipe] norm_pipe_ready;
+  logic [0:EnableFmaNormPipe] norm_pipe_ready;
 
   // Input stage: First element of pipeline is taken from upstream logic
   assign norm_pipe_final_mant_q[0]  = final_mantissa;
@@ -763,7 +763,7 @@ module fpnew_fma_multi #(
   assign mid_pipe_ready[NUM_MID_REGS] = norm_pipe_ready[0];
 
   // Generate the register stages
-  for (genvar i = 0; i < EnableFmaPipe; i++) begin : gen_norm_pipeline
+  for (genvar i = 0; i < EnableFmaNormPipe; i++) begin : gen_norm_pipeline
     // Internal register enable for this stage
     logic reg_ena;
     // Determine the ready signal of the current stage - advance the pipeline:
@@ -791,17 +791,17 @@ module fpnew_fma_multi #(
     `FFL(norm_pipe_aux_q[i+1],         norm_pipe_aux_q[i],         reg_ena, AuxType'('0))
   end
   // Output stage: assign selected pipe outputs to signals for later use
-  assign final_mantissa_q         = norm_pipe_final_mant_q[EnableFmaPipe];
-  assign sum_sticky_bits_q        = norm_pipe_sum_sticky_q[EnableFmaPipe];
-  assign final_exponent_q         = norm_pipe_final_exp_q[EnableFmaPipe];
-  assign final_sign_q2            = norm_pipe_final_sign_q[EnableFmaPipe];
-  assign sticky_before_add_q2     = norm_pipe_sticky_q[EnableFmaPipe];
-  assign effective_subtraction_q2 = norm_pipe_eff_sub_q[EnableFmaPipe];
-  assign dst_fmt_q3               = norm_pipe_dst_fmt_q[EnableFmaPipe];
-  assign rnd_mode_q2              = norm_pipe_rnd_mode_q[EnableFmaPipe];
-  assign result_is_special_q2     = norm_pipe_res_is_spec_q[EnableFmaPipe];
-  assign special_result_q2        = norm_pipe_spec_res_q[EnableFmaPipe];
-  assign special_status_q2        = norm_pipe_spec_stat_q[EnableFmaPipe];
+  assign final_mantissa_q         = norm_pipe_final_mant_q[EnableFmaNormPipe];
+  assign sum_sticky_bits_q        = norm_pipe_sum_sticky_q[EnableFmaNormPipe];
+  assign final_exponent_q         = norm_pipe_final_exp_q[EnableFmaNormPipe];
+  assign final_sign_q2            = norm_pipe_final_sign_q[EnableFmaNormPipe];
+  assign sticky_before_add_q2     = norm_pipe_sticky_q[EnableFmaNormPipe];
+  assign effective_subtraction_q2 = norm_pipe_eff_sub_q[EnableFmaNormPipe];
+  assign dst_fmt_q3               = norm_pipe_dst_fmt_q[EnableFmaNormPipe];
+  assign rnd_mode_q2              = norm_pipe_rnd_mode_q[EnableFmaNormPipe];
+  assign result_is_special_q2     = norm_pipe_res_is_spec_q[EnableFmaNormPipe];
+  assign special_result_q2        = norm_pipe_spec_res_q[EnableFmaNormPipe];
+  assign special_status_q2        = norm_pipe_spec_stat_q[EnableFmaNormPipe];
 
   // Update the sticky bit with the shifted-out bits
   assign sticky_after_norm = (| {sum_sticky_bits_q}) | sticky_before_add_q2;
@@ -954,12 +954,12 @@ module fpnew_fma_multi #(
   // Input stage: First element of pipeline is taken from inputs
   assign out_pipe_result_q[0] = result_d;
   assign out_pipe_status_q[0] = status_d;
-  assign out_pipe_tag_q[0]    = norm_pipe_tag_q[EnableFmaPipe];
-  assign out_pipe_mask_q[0]   = norm_pipe_mask_q[EnableFmaPipe];
-  assign out_pipe_aux_q[0]    = norm_pipe_aux_q[EnableFmaPipe];
-  assign out_pipe_valid_q[0]  = norm_pipe_valid_q[EnableFmaPipe];
+  assign out_pipe_tag_q[0]    = norm_pipe_tag_q[EnableFmaNormPipe];
+  assign out_pipe_mask_q[0]   = norm_pipe_mask_q[EnableFmaNormPipe];
+  assign out_pipe_aux_q[0]    = norm_pipe_aux_q[EnableFmaNormPipe];
+  assign out_pipe_valid_q[0]  = norm_pipe_valid_q[EnableFmaNormPipe];
   // Input stage: Propagate pipeline ready signal to norm pipe
-  assign norm_pipe_ready[EnableFmaPipe] = out_pipe_ready[0];
+  assign norm_pipe_ready[EnableFmaNormPipe] = out_pipe_ready[0];
   // Generate the register stages
   for (genvar i = 0; i < NUM_OUT_REGS; i++) begin : gen_output_pipeline
     // Internal register enable for this stage
@@ -995,9 +995,9 @@ module fpnew_fma_multi #(
   if (NUM_OUT_REGS > 0) begin
     assign early_out_valid_o = |{out_pipe_valid_q[NUM_OUT_REGS] & ~out_pipe_ready[NUM_OUT_REGS],
                                  out_pipe_valid_q[NUM_OUT_REGS-1]};
-  end else if (EnableFmaPipe > 0) begin
-    assign early_out_valid_o = |{norm_pipe_valid_q[EnableFmaPipe] & ~norm_pipe_ready[EnableFmaPipe],
-                                 norm_pipe_valid_q[EnableFmaPipe-1]};
+  end else if (EnableFmaNormPipe > 0) begin
+    assign early_out_valid_o = |{norm_pipe_valid_q[EnableFmaNormPipe] & ~norm_pipe_ready[EnableFmaNormPipe],
+                                 norm_pipe_valid_q[EnableFmaNormPipe-1]};
   end else if (NUM_MID_REGS > 0) begin
     assign early_out_valid_o = |{mid_pipe_valid_q[NUM_MID_REGS] & ~mid_pipe_ready[NUM_MID_REGS],
                                  mid_pipe_valid_q[NUM_MID_REGS-1]};

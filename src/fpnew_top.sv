@@ -21,6 +21,8 @@ module fpnew_top #(
   parameter fpnew_pkg::divsqrt_unit_t       DivSqrtSel     = fpnew_pkg::THMULTI,
   // Enable pipeline between shifter and rounding in cast operation
   parameter logic                           EnableCastPipe = 1'b0,
+  // Enable pipeline between norm shift and rounding in FMA operation
+  parameter logic                           EnableFmaPipe  = 1'b0,
   parameter type                            TagType        = logic,
   parameter int unsigned                    TrueSIMDClass  = 0,
   parameter int unsigned                    EnableSIMDMask = 0,
@@ -132,6 +134,7 @@ module fpnew_top #(
       .EnableVectors  ( EnableVectors  ),
       .DivSqrtSel     ( DivSqrtSel     ),
       .EnableCastPipe ( EnableCastPipe ),
+      .EnableFmaPipe  ( EnableFmaPipe  ),
       .FpFmtMask      ( FpFmtMask      ),
       .IntFmtMask     ( IntFmtMask     ),
       .FmtPipeRegs    ( FmtPipeRegs    ),

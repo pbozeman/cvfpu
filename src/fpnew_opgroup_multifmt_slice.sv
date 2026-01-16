@@ -21,10 +21,11 @@ module fpnew_opgroup_multifmt_slice #(
   // FPU configuration
   parameter fpnew_pkg::fmt_logic_t    FpFmtConfig   = '1,
   parameter fpnew_pkg::ifmt_logic_t   IntFmtConfig  = '1,
-  parameter logic                     EnableVectors = 1'b1,
-  parameter fpnew_pkg::divsqrt_unit_t DivSqrtSel    = fpnew_pkg::THMULTI,
-  parameter logic                     EnableCastPipe  = 1'b0,
-  parameter int unsigned              NumPipeRegs   = 0,
+  parameter logic                     EnableVectors  = 1'b1,
+  parameter fpnew_pkg::divsqrt_unit_t DivSqrtSel     = fpnew_pkg::THMULTI,
+  parameter logic                     EnableCastPipe = 1'b0,
+  parameter logic                     EnableFmaPipe  = 1'b0,
+  parameter int unsigned              NumPipeRegs    = 0,
   parameter fpnew_pkg::pipe_config_t  PipeConfig    = fpnew_pkg::BEFORE,
   parameter logic                     ExtRegEna     = 1'b0,
   parameter type                      TagType       = logic,
@@ -230,11 +231,12 @@ FP8. Please use the PULP DivSqrt unit when in need of div/sqrt operations on FP8
       // Instantiate the operation from the selected opgroup
       if (OpGroup == fpnew_pkg::ADDMUL) begin : lane_instance
         fpnew_fma_multi #(
-          .FpFmtConfig ( LANE_FORMATS         ),
-          .NumPipeRegs ( NumPipeRegs          ),
-          .PipeConfig  ( PipeConfig           ),
-          .TagType     ( TagType              ),
-          .AuxType     ( logic [AUX_BITS-1:0] )
+          .FpFmtConfig   ( LANE_FORMATS         ),
+          .NumPipeRegs   ( NumPipeRegs          ),
+          .EnableFmaPipe ( EnableFmaPipe        ),
+          .PipeConfig    ( PipeConfig           ),
+          .TagType       ( TagType              ),
+          .AuxType       ( logic [AUX_BITS-1:0] )
         ) i_fpnew_fma_multi (
           .clk_i,
           .rst_ni,

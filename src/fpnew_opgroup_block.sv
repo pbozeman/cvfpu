@@ -17,10 +17,11 @@ module fpnew_opgroup_block #(
   parameter fpnew_pkg::opgroup_e        OpGroup       = fpnew_pkg::ADDMUL,
   // FPU configuration
   parameter int unsigned                Width         = 32,
-  parameter logic                       EnableVectors = 1'b1,
-  parameter fpnew_pkg::divsqrt_unit_t   DivSqrtSel    = fpnew_pkg::THMULTI,
-  parameter logic                       EnableCastPipe  = 1'b0,
-  parameter fpnew_pkg::fmt_logic_t      FpFmtMask     = '1,
+  parameter logic                       EnableVectors  = 1'b1,
+  parameter fpnew_pkg::divsqrt_unit_t   DivSqrtSel     = fpnew_pkg::THMULTI,
+  parameter logic                       EnableCastPipe = 1'b0,
+  parameter logic                       EnableFmaPipe  = 1'b0,
+  parameter fpnew_pkg::fmt_logic_t      FpFmtMask      = '1,
   parameter fpnew_pkg::ifmt_logic_t     IntFmtMask    = '1,
   parameter fpnew_pkg::fmt_unsigned_t   FmtPipeRegs   = '{default: 0},
   parameter fpnew_pkg::fmt_unit_types_t FmtUnitTypes  = '{default: fpnew_pkg::PARALLEL},
@@ -113,6 +114,7 @@ module fpnew_opgroup_block #(
         .EnableVectors ( EnableVectors    ),
         .NumPipeRegs   ( FmtPipeRegs[fmt] ),
         .PipeConfig    ( PipeConfig       ),
+        .EnableFmaPipe ( EnableFmaPipe    ),
         .TagType       ( TagType          ),
         .TrueSIMDClass ( TrueSIMDClass    )
       ) i_fmt_slice (
@@ -188,6 +190,7 @@ module fpnew_opgroup_block #(
       .EnableVectors  ( EnableVectors  ),
       .DivSqrtSel     ( DivSqrtSel     ),
       .EnableCastPipe ( EnableCastPipe ),
+      .EnableFmaPipe  ( EnableFmaPipe  ),
       .NumPipeRegs    ( REG            ),
       .PipeConfig     ( PipeConfig     ),
       .TagType        ( TagType        )

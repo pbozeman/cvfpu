@@ -21,6 +21,7 @@ module fpnew_opgroup_fmt_slice #(
   parameter logic                    EnableVectors = 1'b1,
   parameter int unsigned             NumPipeRegs   = 0,
   parameter fpnew_pkg::pipe_config_t PipeConfig    = fpnew_pkg::BEFORE,
+  parameter logic                    EnableFmaPipe = 1'b0,
   parameter logic                    ExtRegEna     = 1'b0,
   parameter type                     TagType       = logic,
   parameter int unsigned             TrueSIMDClass = 0,
@@ -113,11 +114,12 @@ module fpnew_opgroup_fmt_slice #(
       // Instantiate the operation from the selected opgroup
       if (OpGroup == fpnew_pkg::ADDMUL) begin : lane_instance
         fpnew_fma #(
-          .FpFormat    ( FpFormat    ),
-          .NumPipeRegs ( NumPipeRegs ),
-          .PipeConfig  ( PipeConfig  ),
-          .TagType     ( TagType     ),
-          .AuxType     ( logic       )
+          .FpFormat      ( FpFormat      ),
+          .NumPipeRegs   ( NumPipeRegs   ),
+          .EnableFmaPipe ( EnableFmaPipe ),
+          .PipeConfig    ( PipeConfig    ),
+          .TagType       ( TagType       ),
+          .AuxType       ( logic         )
         ) i_fma (
           .clk_i,
           .rst_ni,

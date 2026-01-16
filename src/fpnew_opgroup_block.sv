@@ -19,6 +19,7 @@ module fpnew_opgroup_block #(
   parameter int unsigned                Width         = 32,
   parameter logic                       EnableVectors = 1'b1,
   parameter fpnew_pkg::divsqrt_unit_t   DivSqrtSel    = fpnew_pkg::THMULTI,
+  parameter logic                       EnableCastPipe  = 1'b0,
   parameter fpnew_pkg::fmt_logic_t      FpFmtMask     = '1,
   parameter fpnew_pkg::ifmt_logic_t     IntFmtMask    = '1,
   parameter fpnew_pkg::fmt_unsigned_t   FmtPipeRegs   = '{default: 0},
@@ -180,15 +181,16 @@ module fpnew_opgroup_block #(
     assign in_valid = in_valid_i & (FmtUnitTypes[dst_fmt_i] == fpnew_pkg::MERGED);
 
     fpnew_opgroup_multifmt_slice #(
-      .OpGroup       ( OpGroup          ),
-      .Width         ( Width            ),
-      .FpFmtConfig   ( FpFmtMask        ),
-      .IntFmtConfig  ( IntFmtMask       ),
-      .EnableVectors ( EnableVectors    ),
-      .DivSqrtSel    ( DivSqrtSel       ),
-      .NumPipeRegs   ( REG              ),
-      .PipeConfig    ( PipeConfig       ),
-      .TagType       ( TagType          )
+      .OpGroup        ( OpGroup        ),
+      .Width          ( Width          ),
+      .FpFmtConfig    ( FpFmtMask      ),
+      .IntFmtConfig   ( IntFmtMask     ),
+      .EnableVectors  ( EnableVectors  ),
+      .DivSqrtSel     ( DivSqrtSel     ),
+      .EnableCastPipe ( EnableCastPipe ),
+      .NumPipeRegs    ( REG            ),
+      .PipeConfig     ( PipeConfig     ),
+      .TagType        ( TagType        )
     ) i_multifmt_slice (
       .clk_i,
       .rst_ni,

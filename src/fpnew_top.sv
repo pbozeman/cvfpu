@@ -19,6 +19,8 @@ module fpnew_top #(
   parameter fpnew_pkg::fpu_implementation_t Implementation = fpnew_pkg::DEFAULT_NOREGS,
   // DivSqrtSel chooses among PULP, TH32, or THMULTI (see documentation and fpnew_pkg.sv for further details)
   parameter fpnew_pkg::divsqrt_unit_t       DivSqrtSel     = fpnew_pkg::THMULTI,
+  // Enable pipeline between shifter and rounding in cast operation
+  parameter logic                           EnableCastPipe = 1'b0,
   parameter type                            TagType        = logic,
   parameter int unsigned                    TrueSIMDClass  = 0,
   parameter int unsigned                    EnableSIMDMask = 0,
@@ -125,17 +127,18 @@ module fpnew_top #(
     end
 
     fpnew_opgroup_block #(
-      .OpGroup       ( OpGroup       ),
-      .Width         ( WIDTH         ),
-      .EnableVectors ( EnableVectors ),
-      .DivSqrtSel    ( DivSqrtSel    ),
-      .FpFmtMask     ( FpFmtMask     ),
-      .IntFmtMask    ( IntFmtMask    ),
-      .FmtPipeRegs   ( FmtPipeRegs   ),
-      .FmtUnitTypes  ( FmtUnitTypes  ),
-      .PipeConfig    ( PipeConfig    ),
-      .TagType       ( TagType       ),
-      .TrueSIMDClass ( TrueSIMDClass )
+      .OpGroup        ( OpGroup        ),
+      .Width          ( WIDTH          ),
+      .EnableVectors  ( EnableVectors  ),
+      .DivSqrtSel     ( DivSqrtSel     ),
+      .EnableCastPipe ( EnableCastPipe ),
+      .FpFmtMask      ( FpFmtMask      ),
+      .IntFmtMask     ( IntFmtMask     ),
+      .FmtPipeRegs    ( FmtPipeRegs    ),
+      .FmtUnitTypes   ( FmtUnitTypes   ),
+      .PipeConfig     ( PipeConfig     ),
+      .TagType        ( TagType        ),
+      .TrueSIMDClass  ( TrueSIMDClass  )
     ) i_opgroup_block (
       .clk_i,
       .rst_ni,

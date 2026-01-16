@@ -23,6 +23,7 @@ module fpnew_opgroup_multifmt_slice #(
   parameter fpnew_pkg::ifmt_logic_t   IntFmtConfig  = '1,
   parameter logic                     EnableVectors = 1'b1,
   parameter fpnew_pkg::divsqrt_unit_t DivSqrtSel    = fpnew_pkg::THMULTI,
+  parameter logic                     EnableCastPipe  = 1'b0,
   parameter int unsigned              NumPipeRegs   = 0,
   parameter fpnew_pkg::pipe_config_t  PipeConfig    = fpnew_pkg::BEFORE,
   parameter logic                     ExtRegEna     = 1'b0,
@@ -379,12 +380,13 @@ FP8. Please use the PULP DivSqrt unit when in need of div/sqrt operations on FP8
 
       end else if (OpGroup == fpnew_pkg::CONV) begin : lane_instance
         fpnew_cast_multi #(
-          .FpFmtConfig  ( LANE_FORMATS         ),
-          .IntFmtConfig ( CONV_INT_FORMATS     ),
-          .NumPipeRegs  ( NumPipeRegs          ),
-          .PipeConfig   ( PipeConfig           ),
-          .TagType      ( TagType              ),
-          .AuxType      ( logic [AUX_BITS-1:0] )
+          .FpFmtConfig    ( LANE_FORMATS         ),
+          .IntFmtConfig   ( CONV_INT_FORMATS     ),
+          .NumPipeRegs    ( NumPipeRegs          ),
+          .EnableCastPipe ( EnableCastPipe       ),
+          .PipeConfig     ( PipeConfig           ),
+          .TagType        ( TagType              ),
+          .AuxType        ( logic [AUX_BITS-1:0] )
         ) i_fpnew_cast_multi (
           .clk_i,
           .rst_ni,

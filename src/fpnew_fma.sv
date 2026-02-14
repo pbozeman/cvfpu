@@ -19,6 +19,7 @@ module fpnew_fma #(
   parameter fpnew_pkg::fp_format_e   FpFormat          = fpnew_pkg::fp_format_e'(0),
   parameter int unsigned             NumPipeRegs       = 0,
   parameter logic                    EnableFmaExpPipe  = 1'b0,
+  parameter logic                    EnableFmaAddPipe  = 1'b0,
   parameter logic                    EnableFmaNormPipe = 1'b0,
   parameter fpnew_pkg::pipe_config_t PipeConfig        = fpnew_pkg::BEFORE,
   parameter type                     TagType           = logic,
@@ -429,8 +430,6 @@ module fpnew_fma #(
   logic [3*PRECISION_BITS+3:0] addend_after_shift;  // upper 3p+4 bits are needed to go on
   logic [PRECISION_BITS-1:0]   addend_sticky_bits;  // up to p bit of shifted addend are sticky
   logic                        sticky_before_add;   // they are compressed into a single sticky bit
-  logic [3*PRECISION_BITS+3:0] addend_shifted;      // addends are 3p+4 bit wide (including G/R)
-  logic                        inject_carry_in;     // inject carry for subtractions if needed
 
   // In parallel, the addend is right-shifted according to the exponent difference. Up to p bits
   // are shifted out and compressed into a sticky bit.
@@ -444,11 +443,95 @@ module fpnew_fma #(
       (mantissa_c_exp << (3 * PRECISION_BITS + 4)) >> addend_shamt;
 
   assign sticky_before_add     = (| addend_sticky_bits);
-  // assign addend_after_shift[0] = sticky_before_add;
 
-  // In case of a subtraction, the addend is inverted
-  assign addend_shifted  = (effective_subtraction_exp) ? ~addend_after_shift : addend_after_shift;
-  assign inject_carry_in = effective_subtraction_exp & ~sticky_before_add;
+  // -----------------------
+  // Add pipeline (optional, controlled by EnableFmaAddPipe)
+  // -----------------------
+  // This pipeline stage breaks up the long combinational path from the barrel
+  // shifter output through the wide (3p+4)-bit carry-chain adder.
+  logic [0:EnableFmaAddPipe][3*PRECISION_BITS+3:0]   add_pipe_prod_shifted_q;
+  logic [0:EnableFmaAddPipe][3*PRECISION_BITS+3:0]   add_pipe_addend_after_q;
+  logic                          [0:EnableFmaAddPipe] add_pipe_eff_sub_q;
+  logic                          [0:EnableFmaAddPipe] add_pipe_sticky_q;
+  logic                          [0:EnableFmaAddPipe] add_pipe_tent_sign_q;
+  logic signed [0:EnableFmaAddPipe][EXP_WIDTH-1:0]    add_pipe_exp_prod_q;
+  logic signed [0:EnableFmaAddPipe][EXP_WIDTH-1:0]    add_pipe_exp_diff_q;
+  logic signed [0:EnableFmaAddPipe][EXP_WIDTH-1:0]    add_pipe_tent_exp_q;
+  logic [0:EnableFmaAddPipe][SHIFT_AMOUNT_WIDTH-1:0]  add_pipe_add_shamt_q;
+  fpnew_pkg::roundmode_e         [0:EnableFmaAddPipe] add_pipe_rnd_mode_q;
+  logic                          [0:EnableFmaAddPipe] add_pipe_res_is_spec_q;
+  fp_t                           [0:EnableFmaAddPipe] add_pipe_spec_res_q;
+  fpnew_pkg::status_t            [0:EnableFmaAddPipe] add_pipe_spec_stat_q;
+  TagType                        [0:EnableFmaAddPipe] add_pipe_tag_q;
+  logic                          [0:EnableFmaAddPipe] add_pipe_mask_q;
+  AuxType                        [0:EnableFmaAddPipe] add_pipe_aux_q;
+  logic                          [0:EnableFmaAddPipe] add_pipe_valid_q;
+  logic [0:EnableFmaAddPipe] add_pipe_ready;
+
+  // Input stage: First element of add_pipe is taken from upstream logic
+  assign add_pipe_prod_shifted_q[0] = product_shifted;
+  assign add_pipe_addend_after_q[0]  = addend_after_shift;
+  assign add_pipe_eff_sub_q[0]       = effective_subtraction_exp;
+  assign add_pipe_sticky_q[0]        = sticky_before_add;
+  assign add_pipe_tent_sign_q[0]     = tentative_sign_exp;
+  assign add_pipe_exp_prod_q[0]      = exponent_product;
+  assign add_pipe_exp_diff_q[0]      = exponent_difference_exp;
+  assign add_pipe_tent_exp_q[0]      = tentative_exponent_exp;
+  assign add_pipe_add_shamt_q[0]     = addend_shamt;
+  assign add_pipe_rnd_mode_q[0]      = exp_pipe_rnd_mode_q[EnableFmaExpPipe];
+  assign add_pipe_res_is_spec_q[0]   = exp_pipe_res_is_spec_q[EnableFmaExpPipe];
+  assign add_pipe_spec_res_q[0]      = exp_pipe_spec_res_q[EnableFmaExpPipe];
+  assign add_pipe_spec_stat_q[0]     = exp_pipe_spec_stat_q[EnableFmaExpPipe];
+  assign add_pipe_tag_q[0]           = exp_pipe_tag_q[EnableFmaExpPipe];
+  assign add_pipe_mask_q[0]          = exp_pipe_mask_q[EnableFmaExpPipe];
+  assign add_pipe_aux_q[0]           = exp_pipe_aux_q[EnableFmaExpPipe];
+  assign add_pipe_valid_q[0]         = exp_pipe_valid_q[EnableFmaExpPipe];
+  // Input stage: Propagate pipeline ready signal to exp_pipe
+  assign exp_pipe_ready[EnableFmaExpPipe] = add_pipe_ready[0];
+
+  // Generate the register stages for add_pipe
+  for (genvar i = 0; i < EnableFmaAddPipe; i++) begin : gen_add_pipeline
+    logic reg_ena;
+    assign add_pipe_ready[i] = add_pipe_ready[i+1] | ~add_pipe_valid_q[i+1];
+    `FFLARNC(add_pipe_valid_q[i+1], add_pipe_valid_q[i], add_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+    assign reg_ena = add_pipe_ready[i] & add_pipe_valid_q[i];
+    `FFL(add_pipe_prod_shifted_q[i+1], add_pipe_prod_shifted_q[i], reg_ena, '0)
+    `FFL(add_pipe_addend_after_q[i+1],  add_pipe_addend_after_q[i],  reg_ena, '0)
+    `FFL(add_pipe_eff_sub_q[i+1],       add_pipe_eff_sub_q[i],       reg_ena, '0)
+    `FFL(add_pipe_sticky_q[i+1],        add_pipe_sticky_q[i],        reg_ena, '0)
+    `FFL(add_pipe_tent_sign_q[i+1],     add_pipe_tent_sign_q[i],     reg_ena, '0)
+    `FFL(add_pipe_exp_prod_q[i+1],      add_pipe_exp_prod_q[i],      reg_ena, '0)
+    `FFL(add_pipe_exp_diff_q[i+1],      add_pipe_exp_diff_q[i],      reg_ena, '0)
+    `FFL(add_pipe_tent_exp_q[i+1],      add_pipe_tent_exp_q[i],      reg_ena, '0)
+    `FFL(add_pipe_add_shamt_q[i+1],     add_pipe_add_shamt_q[i],     reg_ena, '0)
+    `FFL(add_pipe_rnd_mode_q[i+1],      add_pipe_rnd_mode_q[i],      reg_ena, fpnew_pkg::RNE)
+    `FFL(add_pipe_res_is_spec_q[i+1],   add_pipe_res_is_spec_q[i],   reg_ena, '0)
+    `FFL(add_pipe_spec_res_q[i+1],      add_pipe_spec_res_q[i],      reg_ena, '0)
+    `FFL(add_pipe_spec_stat_q[i+1],     add_pipe_spec_stat_q[i],     reg_ena, '0)
+    `FFL(add_pipe_tag_q[i+1],           add_pipe_tag_q[i],           reg_ena, TagType'('0))
+    `FFL(add_pipe_mask_q[i+1],          add_pipe_mask_q[i],          reg_ena, '0)
+    `FFL(add_pipe_aux_q[i+1],           add_pipe_aux_q[i],           reg_ena, AuxType'('0))
+  end
+
+  // Signals after add_pipe for downstream use
+  logic [3*PRECISION_BITS+3:0] product_shifted_add;
+  logic [3*PRECISION_BITS+3:0] addend_after_shift_add;
+  logic                        effective_subtraction_add;
+  logic                        sticky_before_add_add;
+  logic                        tentative_sign_add;
+
+  assign product_shifted_add      = add_pipe_prod_shifted_q[EnableFmaAddPipe];
+  assign addend_after_shift_add   = add_pipe_addend_after_q[EnableFmaAddPipe];
+  assign effective_subtraction_add = add_pipe_eff_sub_q[EnableFmaAddPipe];
+  assign sticky_before_add_add    = add_pipe_sticky_q[EnableFmaAddPipe];
+  assign tentative_sign_add       = add_pipe_tent_sign_q[EnableFmaAddPipe];
+
+  // Recompute addend inversion and carry injection after add_pipe (trivial gates)
+  logic [3*PRECISION_BITS+3:0] addend_shifted_add;
+  logic                        inject_carry_in_add;
+
+  assign addend_shifted_add  = effective_subtraction_add ? ~addend_after_shift_add : addend_after_shift_add;
+  assign inject_carry_in_add = effective_subtraction_add & ~sticky_before_add_add;
 
   // ------
   // Adder
@@ -459,21 +542,21 @@ module fpnew_fma #(
   logic                        final_sign;
 
   //Mantissa adder (ab+c). In normal addition, it cannot overflow.
-  assign sum_pos = product_shifted + addend_shifted + inject_carry_in;
+  assign sum_pos = product_shifted_add + addend_shifted_add + inject_carry_in_add;
   assign sum_carry = sum_pos[3*PRECISION_BITS+4];
 
   // Parallel adder for negative sum (only used for effective subtractions).
   // Note: inject_carry_in is used to complete the negation of the addend in the positive sum but
   // for the negative sum the addend is not negated, so no carry needs to be injected.
-  assign sum_neg = addend_after_shift - product_shifted;
+  assign sum_neg = addend_after_shift_add - product_shifted_add;
 
   // Complement negative sum (can only happen in subtraction -> overflows for positive results)
-  assign sum        = (effective_subtraction_exp && ~sum_carry) ? sum_neg : sum_pos;
+  assign sum        = (effective_subtraction_add && ~sum_carry) ? sum_neg : sum_pos;
 
   // In case of a mispredicted subtraction result, do a sign flip
-  assign final_sign = (effective_subtraction_exp && (sum_carry == tentative_sign_exp))
+  assign final_sign = (effective_subtraction_add && (sum_carry == tentative_sign_add))
                       ? 1'b1
-                      : (effective_subtraction_exp ? 1'b0 : tentative_sign_exp);
+                      : (effective_subtraction_add ? 1'b0 : tentative_sign_add);
 
   // ---------------
   // Internal pipeline
@@ -511,25 +594,25 @@ module fpnew_fma #(
   // Ready signal is combinatorial for all stages
   logic [0:NUM_MID_REGS] mid_pipe_ready;
 
-  // Input stage: First element of pipeline is taken from upstream logic (exp_pipe)
-  assign mid_pipe_eff_sub_q[0]     = effective_subtraction_exp;
-  assign mid_pipe_exp_prod_q[0]    = exponent_product;
-  assign mid_pipe_exp_diff_q[0]    = exponent_difference_exp;
-  assign mid_pipe_tent_exp_q[0]    = tentative_exponent_exp;
-  assign mid_pipe_add_shamt_q[0]   = addend_shamt;
-  assign mid_pipe_sticky_q[0]      = sticky_before_add;
+  // Input stage: First element of pipeline is taken from upstream logic (add_pipe)
+  assign mid_pipe_eff_sub_q[0]     = effective_subtraction_add;
+  assign mid_pipe_exp_prod_q[0]    = add_pipe_exp_prod_q[EnableFmaAddPipe];
+  assign mid_pipe_exp_diff_q[0]    = add_pipe_exp_diff_q[EnableFmaAddPipe];
+  assign mid_pipe_tent_exp_q[0]    = add_pipe_tent_exp_q[EnableFmaAddPipe];
+  assign mid_pipe_add_shamt_q[0]   = add_pipe_add_shamt_q[EnableFmaAddPipe];
+  assign mid_pipe_sticky_q[0]      = sticky_before_add_add;
   assign mid_pipe_sum_q[0]         = sum;
   assign mid_pipe_final_sign_q[0]  = final_sign;
-  assign mid_pipe_rnd_mode_q[0]    = exp_pipe_rnd_mode_q[EnableFmaExpPipe];
-  assign mid_pipe_res_is_spec_q[0] = exp_pipe_res_is_spec_q[EnableFmaExpPipe];
-  assign mid_pipe_spec_res_q[0]    = exp_pipe_spec_res_q[EnableFmaExpPipe];
-  assign mid_pipe_spec_stat_q[0]   = exp_pipe_spec_stat_q[EnableFmaExpPipe];
-  assign mid_pipe_tag_q[0]         = exp_pipe_tag_q[EnableFmaExpPipe];
-  assign mid_pipe_mask_q[0]        = exp_pipe_mask_q[EnableFmaExpPipe];
-  assign mid_pipe_aux_q[0]         = exp_pipe_aux_q[EnableFmaExpPipe];
-  assign mid_pipe_valid_q[0]       = exp_pipe_valid_q[EnableFmaExpPipe];
-  // Input stage: Propagate pipeline ready signal to exp_pipe
-  assign exp_pipe_ready[EnableFmaExpPipe] = mid_pipe_ready[0];
+  assign mid_pipe_rnd_mode_q[0]    = add_pipe_rnd_mode_q[EnableFmaAddPipe];
+  assign mid_pipe_res_is_spec_q[0] = add_pipe_res_is_spec_q[EnableFmaAddPipe];
+  assign mid_pipe_spec_res_q[0]    = add_pipe_spec_res_q[EnableFmaAddPipe];
+  assign mid_pipe_spec_stat_q[0]   = add_pipe_spec_stat_q[EnableFmaAddPipe];
+  assign mid_pipe_tag_q[0]         = add_pipe_tag_q[EnableFmaAddPipe];
+  assign mid_pipe_mask_q[0]        = add_pipe_mask_q[EnableFmaAddPipe];
+  assign mid_pipe_aux_q[0]         = add_pipe_aux_q[EnableFmaAddPipe];
+  assign mid_pipe_valid_q[0]       = add_pipe_valid_q[EnableFmaAddPipe];
+  // Input stage: Propagate pipeline ready signal to add_pipe
+  assign add_pipe_ready[EnableFmaAddPipe] = mid_pipe_ready[0];
 
   // Generate the register stages
   for (genvar i = 0; i < NUM_MID_REGS; i++) begin : gen_inside_pipeline
@@ -870,7 +953,7 @@ module fpnew_fma #(
   assign mask_o          = out_pipe_mask_q[NUM_OUT_REGS];
   assign aux_o           = out_pipe_aux_q[NUM_OUT_REGS];
   assign out_valid_o     = out_pipe_valid_q[NUM_OUT_REGS];
-  assign busy_o          = (| {inp_pipe_valid_q, exp_pipe_valid_q, mid_pipe_valid_q, norm_pipe_valid_q, out_pipe_valid_q});
+  assign busy_o          = (| {inp_pipe_valid_q, exp_pipe_valid_q, add_pipe_valid_q, mid_pipe_valid_q, norm_pipe_valid_q, out_pipe_valid_q});
 
   // Early valid_o signal. This is used for dispatching instructions for dual-issue processor.
   if (NUM_OUT_REGS > 0) begin
@@ -882,6 +965,9 @@ module fpnew_fma #(
   end else if (NUM_MID_REGS > 0) begin
     assign early_out_valid_o = |{mid_pipe_valid_q[NUM_MID_REGS] & ~mid_pipe_ready[NUM_MID_REGS],
                                  mid_pipe_valid_q[NUM_MID_REGS-1]};
+  end else if (EnableFmaAddPipe) begin
+    assign early_out_valid_o = |{add_pipe_valid_q[EnableFmaAddPipe] & ~add_pipe_ready[EnableFmaAddPipe],
+                                 add_pipe_valid_q[EnableFmaAddPipe-1]};
   end else if (EnableFmaExpPipe) begin
     assign early_out_valid_o = |{exp_pipe_valid_q[EnableFmaExpPipe] & ~exp_pipe_ready[EnableFmaExpPipe],
                                  exp_pipe_valid_q[EnableFmaExpPipe-1]};

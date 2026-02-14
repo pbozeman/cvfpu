@@ -23,6 +23,8 @@ module fpnew_top #(
   parameter logic                           EnableCastPipe    = 1'b0,
   // Enable pipeline between exponent calculation and addend shift in FMA operation
   parameter logic                           EnableFmaExpPipe  = 1'b0,
+  // Enable pipeline between barrel shift and wide adder in FMA operation
+  parameter logic                           EnableFmaAddPipe  = 1'b0,
   // Enable pipeline between norm shift and rounding in FMA operation
   parameter logic                           EnableFmaNormPipe = 1'b0,
   parameter type                            TagType           = logic,
@@ -137,6 +139,7 @@ module fpnew_top #(
       .DivSqrtSel        ( DivSqrtSel        ),
       .EnableCastPipe    ( EnableCastPipe    ),
       .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
+      .EnableFmaAddPipe  ( EnableFmaAddPipe  ),
       .EnableFmaNormPipe ( EnableFmaNormPipe ),
       .FpFmtMask         ( FpFmtMask         ),
       .IntFmtMask        ( IntFmtMask        ),

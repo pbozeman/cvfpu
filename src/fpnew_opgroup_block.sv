@@ -21,6 +21,7 @@ module fpnew_opgroup_block #(
   parameter fpnew_pkg::divsqrt_unit_t   DivSqrtSel     = fpnew_pkg::THMULTI,
   parameter logic                       EnableCastPipe    = 1'b0,
   parameter logic                       EnableFmaExpPipe  = 1'b0,
+  parameter logic                       EnableFmaAddPipe  = 1'b0,
   parameter logic                       EnableFmaNormPipe = 1'b0,
   parameter fpnew_pkg::fmt_logic_t      FpFmtMask         = '1,
   parameter fpnew_pkg::ifmt_logic_t     IntFmtMask    = '1,
@@ -116,6 +117,7 @@ module fpnew_opgroup_block #(
         .NumPipeRegs       ( FmtPipeRegs[fmt]  ),
         .PipeConfig        ( PipeConfig        ),
         .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
+        .EnableFmaAddPipe  ( EnableFmaAddPipe  ),
         .EnableFmaNormPipe ( EnableFmaNormPipe ),
         .TagType           ( TagType           ),
         .TrueSIMDClass     ( TrueSIMDClass     )

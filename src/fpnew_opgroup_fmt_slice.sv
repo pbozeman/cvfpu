@@ -24,6 +24,7 @@ module fpnew_opgroup_fmt_slice #(
   parameter logic                    EnableFmaExpPipe  = 1'b0,
   parameter logic                    EnableFmaAddPipe  = 1'b0,
   parameter logic                    EnableFmaNormPipe = 1'b0,
+  parameter logic                    EnableFmaLzcPipe  = 1'b0,
   parameter logic                    ExtRegEna         = 1'b0,
   parameter type                     TagType       = logic,
   parameter int unsigned             TrueSIMDClass = 0,
@@ -121,6 +122,7 @@ module fpnew_opgroup_fmt_slice #(
           .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
           .EnableFmaAddPipe  ( EnableFmaAddPipe  ),
           .EnableFmaNormPipe ( EnableFmaNormPipe ),
+          .EnableFmaLzcPipe  ( EnableFmaLzcPipe  ),
           .PipeConfig        ( PipeConfig        ),
           .TagType           ( TagType           ),
           .AuxType           ( logic             )

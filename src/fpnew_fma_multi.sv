@@ -19,6 +19,7 @@ module fpnew_fma_multi #(
   parameter fpnew_pkg::fmt_logic_t   FpFmtConfig   = '1,
   parameter int unsigned             NumPipeRegs   = 0,
   parameter logic                    EnableFmaNormPipe = 1'b0,
+  parameter logic                    EnableFmaLzcPipe  = 1'b0,
   parameter fpnew_pkg::pipe_config_t PipeConfig    = fpnew_pkg::BEFORE,
   parameter type                     TagType       = logic,
   parameter type                     AuxType       = logic,
@@ -681,27 +682,99 @@ module fpnew_fma_multi #(
     end
   end
 
+  // -----------------------
+  // LZC pipeline (optional, controlled by EnableFmaLzcPipe)
+  // -----------------------
+  // This pipeline stage breaks up the long combinational path from LZC +
+  // norm_shamt calculation through the big barrel shift and mantissa extraction.
+  logic [0:EnableFmaLzcPipe][3*PRECISION_BITS+3:0]   lzc_pipe_sum_q;
+  logic [0:EnableFmaLzcPipe][SHIFT_AMOUNT_WIDTH-1:0] lzc_pipe_norm_shamt_q;
+  logic signed [0:EnableFmaLzcPipe][EXP_WIDTH-1:0]   lzc_pipe_norm_exp_q;
+  logic                          [0:EnableFmaLzcPipe] lzc_pipe_final_sign_q;
+  logic                          [0:EnableFmaLzcPipe] lzc_pipe_sticky_q;
+  logic                          [0:EnableFmaLzcPipe] lzc_pipe_eff_sub_q;
+  fpnew_pkg::roundmode_e         [0:EnableFmaLzcPipe] lzc_pipe_rnd_mode_q;
+  fpnew_pkg::fp_format_e         [0:EnableFmaLzcPipe] lzc_pipe_dst_fmt_q;
+  logic                          [0:EnableFmaLzcPipe] lzc_pipe_res_is_spec_q;
+  fp_t                           [0:EnableFmaLzcPipe] lzc_pipe_spec_res_q;
+  fpnew_pkg::status_t            [0:EnableFmaLzcPipe] lzc_pipe_spec_stat_q;
+  TagType                        [0:EnableFmaLzcPipe] lzc_pipe_tag_q;
+  logic                          [0:EnableFmaLzcPipe] lzc_pipe_mask_q;
+  AuxType                        [0:EnableFmaLzcPipe] lzc_pipe_aux_q;
+  logic                          [0:EnableFmaLzcPipe] lzc_pipe_valid_q;
+  logic [0:EnableFmaLzcPipe] lzc_pipe_ready;
+
+  // Input stage: First element of lzc_pipe is taken from upstream logic
+  assign lzc_pipe_sum_q[0]         = sum_q;
+  assign lzc_pipe_norm_shamt_q[0]  = norm_shamt;
+  assign lzc_pipe_norm_exp_q[0]    = normalized_exponent;
+  assign lzc_pipe_final_sign_q[0]  = final_sign_q;
+  assign lzc_pipe_sticky_q[0]      = sticky_before_add_q;
+  assign lzc_pipe_eff_sub_q[0]     = effective_subtraction_q;
+  assign lzc_pipe_rnd_mode_q[0]    = rnd_mode_q;
+  assign lzc_pipe_dst_fmt_q[0]     = dst_fmt_q2;
+  assign lzc_pipe_res_is_spec_q[0] = result_is_special_q;
+  assign lzc_pipe_spec_res_q[0]    = special_result_q;
+  assign lzc_pipe_spec_stat_q[0]   = special_status_q;
+  assign lzc_pipe_tag_q[0]         = mid_pipe_tag_q[NUM_MID_REGS];
+  assign lzc_pipe_mask_q[0]        = mid_pipe_mask_q[NUM_MID_REGS];
+  assign lzc_pipe_aux_q[0]         = mid_pipe_aux_q[NUM_MID_REGS];
+  assign lzc_pipe_valid_q[0]       = mid_pipe_valid_q[NUM_MID_REGS];
+  // Input stage: Propagate pipeline ready signal to mid pipe
+  assign mid_pipe_ready[NUM_MID_REGS] = lzc_pipe_ready[0];
+
+  // Generate the register stages for lzc_pipe
+  for (genvar i = 0; i < EnableFmaLzcPipe; i++) begin : gen_lzc_pipeline
+    logic reg_ena;
+    assign lzc_pipe_ready[i] = lzc_pipe_ready[i+1] | ~lzc_pipe_valid_q[i+1];
+    `FFLARNC(lzc_pipe_valid_q[i+1], lzc_pipe_valid_q[i], lzc_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+    assign reg_ena = lzc_pipe_ready[i] & lzc_pipe_valid_q[i];
+    `FFL(lzc_pipe_sum_q[i+1],         lzc_pipe_sum_q[i],         reg_ena, '0)
+    `FFL(lzc_pipe_norm_shamt_q[i+1],  lzc_pipe_norm_shamt_q[i],  reg_ena, '0)
+    `FFL(lzc_pipe_norm_exp_q[i+1],    lzc_pipe_norm_exp_q[i],    reg_ena, '0)
+    `FFL(lzc_pipe_final_sign_q[i+1],  lzc_pipe_final_sign_q[i],  reg_ena, '0)
+    `FFL(lzc_pipe_sticky_q[i+1],      lzc_pipe_sticky_q[i],      reg_ena, '0)
+    `FFL(lzc_pipe_eff_sub_q[i+1],     lzc_pipe_eff_sub_q[i],     reg_ena, '0)
+    `FFL(lzc_pipe_rnd_mode_q[i+1],    lzc_pipe_rnd_mode_q[i],    reg_ena, fpnew_pkg::RNE)
+    `FFL(lzc_pipe_dst_fmt_q[i+1],     lzc_pipe_dst_fmt_q[i],     reg_ena, fpnew_pkg::fp_format_e'(0))
+    `FFL(lzc_pipe_res_is_spec_q[i+1], lzc_pipe_res_is_spec_q[i], reg_ena, '0)
+    `FFL(lzc_pipe_spec_res_q[i+1],    lzc_pipe_spec_res_q[i],    reg_ena, '0)
+    `FFL(lzc_pipe_spec_stat_q[i+1],   lzc_pipe_spec_stat_q[i],   reg_ena, '0)
+    `FFL(lzc_pipe_tag_q[i+1],         lzc_pipe_tag_q[i],         reg_ena, TagType'('0))
+    `FFL(lzc_pipe_mask_q[i+1],        lzc_pipe_mask_q[i],        reg_ena, '0)
+    `FFL(lzc_pipe_aux_q[i+1],         lzc_pipe_aux_q[i],         reg_ena, AuxType'('0))
+  end
+
+  // Signals after lzc_pipe for downstream use
+  logic [3*PRECISION_BITS+3:0]   sum_lzc;
+  logic [SHIFT_AMOUNT_WIDTH-1:0] norm_shamt_lzc;
+  logic signed [EXP_WIDTH-1:0]   normalized_exponent_lzc;
+
+  assign sum_lzc                  = lzc_pipe_sum_q[EnableFmaLzcPipe];
+  assign norm_shamt_lzc           = lzc_pipe_norm_shamt_q[EnableFmaLzcPipe];
+  assign normalized_exponent_lzc  = lzc_pipe_norm_exp_q[EnableFmaLzcPipe];
+
   // Do the large normalization shift
-  assign sum_shifted       = sum_q << norm_shamt;
+  assign sum_shifted       = sum_lzc << norm_shamt_lzc;
 
   // The addend-anchored case needs a 1-bit normalization since the leading-one can be to the left
   // or right of the (non-carry) MSB of the sum.
   always_comb begin : small_norm
     // Default assignment, discarding carry bit
     {final_mantissa, sum_sticky_bits} = sum_shifted;
-    final_exponent                    = normalized_exponent;
+    final_exponent                    = normalized_exponent_lzc;
 
     // The normalized sum has overflown, align right and fix exponent
     if (sum_shifted[3*PRECISION_BITS+4]) begin // check the carry bit
       {final_mantissa, sum_sticky_bits} = sum_shifted >> 1;
-      final_exponent                    = normalized_exponent + 1;
+      final_exponent                    = normalized_exponent_lzc + 1;
     // The normalized sum is normal, nothing to do
     end else if (sum_shifted[3*PRECISION_BITS+3]) begin // check the sum MSB
       // do nothing
     // The normalized sum is still denormal, align left - unless the result is not already subnormal
-    end else if (normalized_exponent > 1) begin
+    end else if (normalized_exponent_lzc > 1) begin
       {final_mantissa, sum_sticky_bits} = sum_shifted << 1;
-      final_exponent                    = normalized_exponent - 1;
+      final_exponent                    = normalized_exponent_lzc - 1;
     // Otherwise we're denormal
     end else begin
       final_exponent = '0;
@@ -743,24 +816,24 @@ module fpnew_fma_multi #(
   // Ready signal is combinatorial for all stages
   logic [0:EnableFmaNormPipe] norm_pipe_ready;
 
-  // Input stage: First element of pipeline is taken from upstream logic
+  // Input stage: First element of pipeline is taken from upstream logic (lzc_pipe)
   assign norm_pipe_final_mant_q[0]  = final_mantissa;
   assign norm_pipe_sum_sticky_q[0]  = sum_sticky_bits;
   assign norm_pipe_final_exp_q[0]   = final_exponent;
-  assign norm_pipe_final_sign_q[0]  = final_sign_q;
-  assign norm_pipe_sticky_q[0]      = sticky_before_add_q;
-  assign norm_pipe_eff_sub_q[0]     = effective_subtraction_q;
-  assign norm_pipe_dst_fmt_q[0]     = dst_fmt_q2;
-  assign norm_pipe_rnd_mode_q[0]    = rnd_mode_q;
-  assign norm_pipe_res_is_spec_q[0] = result_is_special_q;
-  assign norm_pipe_spec_res_q[0]    = special_result_q;
-  assign norm_pipe_spec_stat_q[0]   = special_status_q;
-  assign norm_pipe_tag_q[0]         = mid_pipe_tag_q[NUM_MID_REGS];
-  assign norm_pipe_mask_q[0]        = mid_pipe_mask_q[NUM_MID_REGS];
-  assign norm_pipe_aux_q[0]         = mid_pipe_aux_q[NUM_MID_REGS];
-  assign norm_pipe_valid_q[0]       = mid_pipe_valid_q[NUM_MID_REGS];
-  // Input stage: Propagate pipeline ready signal to mid pipe
-  assign mid_pipe_ready[NUM_MID_REGS] = norm_pipe_ready[0];
+  assign norm_pipe_final_sign_q[0]  = lzc_pipe_final_sign_q[EnableFmaLzcPipe];
+  assign norm_pipe_sticky_q[0]      = lzc_pipe_sticky_q[EnableFmaLzcPipe];
+  assign norm_pipe_eff_sub_q[0]     = lzc_pipe_eff_sub_q[EnableFmaLzcPipe];
+  assign norm_pipe_dst_fmt_q[0]     = lzc_pipe_dst_fmt_q[EnableFmaLzcPipe];
+  assign norm_pipe_rnd_mode_q[0]    = lzc_pipe_rnd_mode_q[EnableFmaLzcPipe];
+  assign norm_pipe_res_is_spec_q[0] = lzc_pipe_res_is_spec_q[EnableFmaLzcPipe];
+  assign norm_pipe_spec_res_q[0]    = lzc_pipe_spec_res_q[EnableFmaLzcPipe];
+  assign norm_pipe_spec_stat_q[0]   = lzc_pipe_spec_stat_q[EnableFmaLzcPipe];
+  assign norm_pipe_tag_q[0]         = lzc_pipe_tag_q[EnableFmaLzcPipe];
+  assign norm_pipe_mask_q[0]        = lzc_pipe_mask_q[EnableFmaLzcPipe];
+  assign norm_pipe_aux_q[0]         = lzc_pipe_aux_q[EnableFmaLzcPipe];
+  assign norm_pipe_valid_q[0]       = lzc_pipe_valid_q[EnableFmaLzcPipe];
+  // Input stage: Propagate pipeline ready signal to lzc pipe
+  assign lzc_pipe_ready[EnableFmaLzcPipe] = norm_pipe_ready[0];
 
   // Generate the register stages
   for (genvar i = 0; i < EnableFmaNormPipe; i++) begin : gen_norm_pipeline
@@ -989,7 +1062,7 @@ module fpnew_fma_multi #(
   assign mask_o          = out_pipe_mask_q[NUM_OUT_REGS];
   assign aux_o           = out_pipe_aux_q[NUM_OUT_REGS];
   assign out_valid_o     = out_pipe_valid_q[NUM_OUT_REGS];
-  assign busy_o          = (| {inp_pipe_valid_q, mid_pipe_valid_q, norm_pipe_valid_q, out_pipe_valid_q});
+  assign busy_o          = (| {inp_pipe_valid_q, mid_pipe_valid_q, lzc_pipe_valid_q, norm_pipe_valid_q, out_pipe_valid_q});
 
   // Early valid_o signal. This is used for dispatching instructions for dual-issue processor.
   if (NUM_OUT_REGS > 0) begin
@@ -998,6 +1071,9 @@ module fpnew_fma_multi #(
   end else if (EnableFmaNormPipe > 0) begin
     assign early_out_valid_o = |{norm_pipe_valid_q[EnableFmaNormPipe] & ~norm_pipe_ready[EnableFmaNormPipe],
                                  norm_pipe_valid_q[EnableFmaNormPipe-1]};
+  end else if (EnableFmaLzcPipe > 0) begin
+    assign early_out_valid_o = |{lzc_pipe_valid_q[EnableFmaLzcPipe] & ~lzc_pipe_ready[EnableFmaLzcPipe],
+                                 lzc_pipe_valid_q[EnableFmaLzcPipe-1]};
   end else if (NUM_MID_REGS > 0) begin
     assign early_out_valid_o = |{mid_pipe_valid_q[NUM_MID_REGS] & ~mid_pipe_ready[NUM_MID_REGS],
                                  mid_pipe_valid_q[NUM_MID_REGS-1]};

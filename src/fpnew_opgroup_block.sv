@@ -23,6 +23,7 @@ module fpnew_opgroup_block #(
   parameter logic                       EnableFmaExpPipe  = 1'b0,
   parameter logic                       EnableFmaAddPipe  = 1'b0,
   parameter logic                       EnableFmaNormPipe = 1'b0,
+  parameter logic                       EnableFmaLzcPipe  = 1'b0,
   parameter fpnew_pkg::fmt_logic_t      FpFmtMask         = '1,
   parameter fpnew_pkg::ifmt_logic_t     IntFmtMask    = '1,
   parameter fpnew_pkg::fmt_unsigned_t   FmtPipeRegs   = '{default: 0},
@@ -119,6 +120,7 @@ module fpnew_opgroup_block #(
         .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
         .EnableFmaAddPipe  ( EnableFmaAddPipe  ),
         .EnableFmaNormPipe ( EnableFmaNormPipe ),
+        .EnableFmaLzcPipe  ( EnableFmaLzcPipe  ),
         .TagType           ( TagType           ),
         .TrueSIMDClass     ( TrueSIMDClass     )
       ) i_fmt_slice (
@@ -195,6 +197,7 @@ module fpnew_opgroup_block #(
       .DivSqrtSel       ( DivSqrtSel       ),
       .EnableCastPipe   ( EnableCastPipe   ),
       .EnableFmaNormPipe( EnableFmaNormPipe),
+      .EnableFmaLzcPipe ( EnableFmaLzcPipe ),
       .NumPipeRegs      ( REG              ),
       .PipeConfig       ( PipeConfig       ),
       .TagType          ( TagType          )

@@ -27,6 +27,7 @@ module fpnew_top #(
   parameter logic                           EnableFmaAddPipe  = 1'b0,
   // Enable pipeline between norm shift and rounding in FMA operation
   parameter logic                           EnableFmaNormPipe = 1'b0,
+  parameter logic                           EnableFmaLzcPipe  = 1'b0,
   parameter type                            TagType           = logic,
   parameter int unsigned                    TrueSIMDClass  = 0,
   parameter int unsigned                    EnableSIMDMask = 0,
@@ -141,6 +142,7 @@ module fpnew_top #(
       .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
       .EnableFmaAddPipe  ( EnableFmaAddPipe  ),
       .EnableFmaNormPipe ( EnableFmaNormPipe ),
+      .EnableFmaLzcPipe  ( EnableFmaLzcPipe  ),
       .FpFmtMask         ( FpFmtMask         ),
       .IntFmtMask        ( IntFmtMask        ),
       .FmtPipeRegs       ( FmtPipeRegs       ),

@@ -22,6 +22,7 @@ module fpnew_cast_multi #(
   parameter int unsigned             NumPipeRegs = 0,
   parameter logic                    EnableCastPipe = 1'b0, // Pipeline between shifter and rounding
   parameter logic                    EnableCastOvfPipe = 1'b0, // Pipeline between overflow detection and barrel shift
+  parameter logic                    EnableCastLzcPipe = 1'b0, // Pipeline between LZC and exponent/shift computation
   parameter fpnew_pkg::pipe_config_t PipeConfig  = fpnew_pkg::BEFORE,
   parameter type                     TagType     = logic,
   parameter type                     AuxType     = logic,
@@ -292,23 +293,106 @@ module fpnew_cast_multi #(
     .cnt_o   ( renorm_shamt ),
     .empty_o ( mant_is_zero )
   );
-  assign renorm_shamt_sgn = signed'({1'b0, renorm_shamt});
-
-  // Get the sign from the proper source
+  // Get the sign from the proper source (pre-lzc_pipe)
   assign input_sign = src_is_int ? int_sign : fmt_sign[src_fmt_q];
+
+  // ----------------------------
+  // LZC pipeline (optional, between LZC and exponent computation)
+  // ----------------------------
+  // This pipeline stage breaks the long combinational path from LZC output
+  // through exponent computation and normalization shift to mid_pipe.
+  logic                   [0:EnableCastLzcPipe][LZC_RESULT_WIDTH-1:0]  lzc_pipe_renorm_shamt_q;
+  logic                   [0:EnableCastLzcPipe]                        lzc_pipe_mant_is_zero_q;
+  logic                   [0:EnableCastLzcPipe][INT_MAN_WIDTH-1:0]     lzc_pipe_encoded_mant_q;
+  logic signed            [0:EnableCastLzcPipe][INT_EXP_WIDTH-1:0]     lzc_pipe_src_bias_q;
+  logic signed            [0:EnableCastLzcPipe][INT_EXP_WIDTH-1:0]     lzc_pipe_src_exp_q;
+  logic signed            [0:EnableCastLzcPipe][INT_EXP_WIDTH-1:0]     lzc_pipe_src_subnormal_q;
+  logic signed            [0:EnableCastLzcPipe][INT_EXP_WIDTH-1:0]     lzc_pipe_src_offset_q;
+  logic                   [0:EnableCastLzcPipe]                        lzc_pipe_input_sign_q;
+  logic                   [0:EnableCastLzcPipe]                        lzc_pipe_src_is_int_q;
+  logic                   [0:EnableCastLzcPipe]                        lzc_pipe_dst_is_int_q;
+  fpnew_pkg::fp_info_t    [0:EnableCastLzcPipe]                        lzc_pipe_info_q;
+  logic                   [0:EnableCastLzcPipe]                        lzc_pipe_op_mod_q;
+  fpnew_pkg::roundmode_e  [0:EnableCastLzcPipe]                        lzc_pipe_rnd_mode_q;
+  fpnew_pkg::fp_format_e  [0:EnableCastLzcPipe]                        lzc_pipe_src_fmt_q;
+  fpnew_pkg::fp_format_e  [0:EnableCastLzcPipe]                        lzc_pipe_dst_fmt_q;
+  fpnew_pkg::int_format_e [0:EnableCastLzcPipe]                        lzc_pipe_int_fmt_q;
+  TagType                 [0:EnableCastLzcPipe]                        lzc_pipe_tag_q;
+  logic                   [0:EnableCastLzcPipe]                        lzc_pipe_mask_q;
+  AuxType                 [0:EnableCastLzcPipe]                        lzc_pipe_aux_q;
+  logic                   [0:EnableCastLzcPipe]                        lzc_pipe_valid_q;
+  logic [0:EnableCastLzcPipe] lzc_pipe_ready;
+
+  // Input stage: connect from LZC / normalization outputs
+  assign lzc_pipe_renorm_shamt_q[0]  = renorm_shamt;
+  assign lzc_pipe_mant_is_zero_q[0]  = mant_is_zero;
+  assign lzc_pipe_encoded_mant_q[0]  = encoded_mant;
+  assign lzc_pipe_src_bias_q[0]      = src_bias;
+  assign lzc_pipe_src_exp_q[0]       = src_exp;
+  assign lzc_pipe_src_subnormal_q[0] = src_subnormal;
+  assign lzc_pipe_src_offset_q[0]    = src_offset;
+  assign lzc_pipe_input_sign_q[0]    = input_sign;
+  assign lzc_pipe_src_is_int_q[0]    = src_is_int;
+  assign lzc_pipe_dst_is_int_q[0]    = dst_is_int;
+  assign lzc_pipe_info_q[0]          = info[src_fmt_q];
+  assign lzc_pipe_op_mod_q[0]        = op_mod_q;
+  assign lzc_pipe_rnd_mode_q[0]      = inp_pipe_rnd_mode_q[NUM_INP_REGS];
+  assign lzc_pipe_src_fmt_q[0]       = src_fmt_q;
+  assign lzc_pipe_dst_fmt_q[0]       = dst_fmt_q;
+  assign lzc_pipe_int_fmt_q[0]       = int_fmt_q;
+  assign lzc_pipe_tag_q[0]           = inp_pipe_tag_q[NUM_INP_REGS];
+  assign lzc_pipe_mask_q[0]          = inp_pipe_mask_q[NUM_INP_REGS];
+  assign lzc_pipe_aux_q[0]           = inp_pipe_aux_q[NUM_INP_REGS];
+  assign lzc_pipe_valid_q[0]         = inp_pipe_valid_q[NUM_INP_REGS];
+  // Input stage: Propagate pipeline ready signal to input pipe
+  assign inp_pipe_ready[NUM_INP_REGS] = lzc_pipe_ready[0];
+
+  // Generate the register stages for lzc_pipe
+  for (genvar i = 0; i < EnableCastLzcPipe; i++) begin : gen_lzc_pipeline
+    logic reg_ena;
+    assign lzc_pipe_ready[i] = lzc_pipe_ready[i+1] | ~lzc_pipe_valid_q[i+1];
+    `FFLARNC(lzc_pipe_valid_q[i+1], lzc_pipe_valid_q[i], lzc_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+    assign reg_ena = lzc_pipe_ready[i] & lzc_pipe_valid_q[i];
+    `FFL(lzc_pipe_renorm_shamt_q[i+1],  lzc_pipe_renorm_shamt_q[i],  reg_ena, '0)
+    `FFL(lzc_pipe_mant_is_zero_q[i+1],  lzc_pipe_mant_is_zero_q[i],  reg_ena, '0)
+    `FFL(lzc_pipe_encoded_mant_q[i+1],  lzc_pipe_encoded_mant_q[i],  reg_ena, '0)
+    `FFL(lzc_pipe_src_bias_q[i+1],      lzc_pipe_src_bias_q[i],      reg_ena, '0)
+    `FFL(lzc_pipe_src_exp_q[i+1],       lzc_pipe_src_exp_q[i],       reg_ena, '0)
+    `FFL(lzc_pipe_src_subnormal_q[i+1], lzc_pipe_src_subnormal_q[i], reg_ena, '0)
+    `FFL(lzc_pipe_src_offset_q[i+1],    lzc_pipe_src_offset_q[i],    reg_ena, '0)
+    `FFL(lzc_pipe_input_sign_q[i+1],    lzc_pipe_input_sign_q[i],    reg_ena, '0)
+    `FFL(lzc_pipe_src_is_int_q[i+1],    lzc_pipe_src_is_int_q[i],    reg_ena, '0)
+    `FFL(lzc_pipe_dst_is_int_q[i+1],    lzc_pipe_dst_is_int_q[i],    reg_ena, '0)
+    `FFL(lzc_pipe_info_q[i+1],          lzc_pipe_info_q[i],          reg_ena, '0)
+    `FFL(lzc_pipe_op_mod_q[i+1],        lzc_pipe_op_mod_q[i],        reg_ena, '0)
+    `FFL(lzc_pipe_rnd_mode_q[i+1],      lzc_pipe_rnd_mode_q[i],      reg_ena, fpnew_pkg::RNE)
+    `FFL(lzc_pipe_src_fmt_q[i+1],       lzc_pipe_src_fmt_q[i],       reg_ena, fpnew_pkg::fp_format_e'(0))
+    `FFL(lzc_pipe_dst_fmt_q[i+1],       lzc_pipe_dst_fmt_q[i],       reg_ena, fpnew_pkg::fp_format_e'(0))
+    `FFL(lzc_pipe_int_fmt_q[i+1],       lzc_pipe_int_fmt_q[i],       reg_ena, fpnew_pkg::int_format_e'(0))
+    `FFL(lzc_pipe_tag_q[i+1],           lzc_pipe_tag_q[i],           reg_ena, TagType'('0))
+    `FFL(lzc_pipe_mask_q[i+1],          lzc_pipe_mask_q[i],          reg_ena, '0)
+    `FFL(lzc_pipe_aux_q[i+1],           lzc_pipe_aux_q[i],           reg_ena, AuxType'('0))
+  end
+
+  // Post-lzc_pipe: compute normalization and exponent from registered signals
+  assign renorm_shamt_sgn = signed'({1'b0, lzc_pipe_renorm_shamt_q[EnableCastLzcPipe]});
   // Realign input mantissa, append zeroes if destination is wider
-  assign input_mant = encoded_mant << renorm_shamt;
+  assign input_mant = lzc_pipe_encoded_mant_q[EnableCastLzcPipe]
+                      << lzc_pipe_renorm_shamt_q[EnableCastLzcPipe];
   // Unbias exponent and compensate for shift
-  assign fp_input_exp  = signed'(src_exp + src_subnormal - src_bias -
-                                 renorm_shamt_sgn + src_offset); // compensate for shift
+  assign fp_input_exp  = signed'(lzc_pipe_src_exp_q[EnableCastLzcPipe]
+                                 + lzc_pipe_src_subnormal_q[EnableCastLzcPipe]
+                                 - lzc_pipe_src_bias_q[EnableCastLzcPipe]
+                                 - renorm_shamt_sgn
+                                 + lzc_pipe_src_offset_q[EnableCastLzcPipe]);
   assign int_input_exp = signed'(INT_MAN_WIDTH - 1 - renorm_shamt_sgn);
 
-  assign input_exp     = src_is_int ? int_input_exp : fp_input_exp;
+  assign input_exp     = lzc_pipe_src_is_int_q[EnableCastLzcPipe] ? int_input_exp : fp_input_exp;
 
   logic signed [INT_EXP_WIDTH-1:0] destination_exp;  // re-biased exponent for destination
 
   // Rebias the exponent
-  assign destination_exp = input_exp + signed'(fpnew_pkg::bias(dst_fmt_q));
+  assign destination_exp = input_exp + signed'(fpnew_pkg::bias(lzc_pipe_dst_fmt_q[EnableCastLzcPipe]));
 
   // ---------------
   // Internal pipeline
@@ -350,26 +434,26 @@ module fpnew_cast_multi #(
   // Ready signal is combinatorial for all stages
   logic [0:NUM_MID_REGS] mid_pipe_ready;
 
-  // Input stage: First element of pipeline is taken from upstream logic
-  assign mid_pipe_input_sign_q[0] = input_sign;
+  // Input stage: First element of pipeline is taken from lzc_pipe output
+  assign mid_pipe_input_sign_q[0] = lzc_pipe_input_sign_q[EnableCastLzcPipe];
   assign mid_pipe_input_exp_q[0]  = input_exp;
   assign mid_pipe_input_mant_q[0] = input_mant;
   assign mid_pipe_dest_exp_q[0]   = destination_exp;
-  assign mid_pipe_src_is_int_q[0] = src_is_int;
-  assign mid_pipe_dst_is_int_q[0] = dst_is_int;
-  assign mid_pipe_info_q[0]       = info[src_fmt_q];
-  assign mid_pipe_mant_zero_q[0]  = mant_is_zero;
-  assign mid_pipe_op_mod_q[0]     = op_mod_q;
-  assign mid_pipe_rnd_mode_q[0]   = inp_pipe_rnd_mode_q[NUM_INP_REGS];
-  assign mid_pipe_src_fmt_q[0]    = src_fmt_q;
-  assign mid_pipe_dst_fmt_q[0]    = dst_fmt_q;
-  assign mid_pipe_int_fmt_q[0]    = int_fmt_q;
-  assign mid_pipe_tag_q[0]        = inp_pipe_tag_q[NUM_INP_REGS];
-  assign mid_pipe_mask_q[0]       = inp_pipe_mask_q[NUM_INP_REGS];
-  assign mid_pipe_aux_q[0]        = inp_pipe_aux_q[NUM_INP_REGS];
-  assign mid_pipe_valid_q[0]      = inp_pipe_valid_q[NUM_INP_REGS];
-  // Input stage: Propagate pipeline ready signal to input pipe
-  assign inp_pipe_ready[NUM_INP_REGS] = mid_pipe_ready[0];
+  assign mid_pipe_src_is_int_q[0] = lzc_pipe_src_is_int_q[EnableCastLzcPipe];
+  assign mid_pipe_dst_is_int_q[0] = lzc_pipe_dst_is_int_q[EnableCastLzcPipe];
+  assign mid_pipe_info_q[0]       = lzc_pipe_info_q[EnableCastLzcPipe];
+  assign mid_pipe_mant_zero_q[0]  = lzc_pipe_mant_is_zero_q[EnableCastLzcPipe];
+  assign mid_pipe_op_mod_q[0]     = lzc_pipe_op_mod_q[EnableCastLzcPipe];
+  assign mid_pipe_rnd_mode_q[0]   = lzc_pipe_rnd_mode_q[EnableCastLzcPipe];
+  assign mid_pipe_src_fmt_q[0]    = lzc_pipe_src_fmt_q[EnableCastLzcPipe];
+  assign mid_pipe_dst_fmt_q[0]    = lzc_pipe_dst_fmt_q[EnableCastLzcPipe];
+  assign mid_pipe_int_fmt_q[0]    = lzc_pipe_int_fmt_q[EnableCastLzcPipe];
+  assign mid_pipe_tag_q[0]        = lzc_pipe_tag_q[EnableCastLzcPipe];
+  assign mid_pipe_mask_q[0]       = lzc_pipe_mask_q[EnableCastLzcPipe];
+  assign mid_pipe_aux_q[0]        = lzc_pipe_aux_q[EnableCastLzcPipe];
+  assign mid_pipe_valid_q[0]      = lzc_pipe_valid_q[EnableCastLzcPipe];
+  // Input stage: Propagate pipeline ready signal to lzc pipe
+  assign lzc_pipe_ready[EnableCastLzcPipe] = mid_pipe_ready[0];
 
   // Generate the register stages
   for (genvar i = 0; i < NUM_MID_REGS; i++) begin : gen_inside_pipeline

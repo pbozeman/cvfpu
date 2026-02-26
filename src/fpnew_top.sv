@@ -22,6 +22,7 @@ module fpnew_top #(
   // Enable pipeline between shifter and rounding in cast operation
   parameter logic                           EnableCastPipe    = 1'b0,
   parameter logic                           EnableCastOvfPipe = 1'b0,
+  parameter logic                           EnableCastLzcPipe = 1'b0,
   // Enable pipeline between exponent calculation and addend shift in FMA operation
   parameter logic                           EnableFmaMulPipe  = 1'b0,
   parameter logic                           EnableFmaExpPipe  = 1'b0,
@@ -142,6 +143,7 @@ module fpnew_top #(
       .DivSqrtSel        ( DivSqrtSel        ),
       .EnableCastPipe    ( EnableCastPipe    ),
       .EnableCastOvfPipe ( EnableCastOvfPipe ),
+      .EnableCastLzcPipe ( EnableCastLzcPipe ),
       .EnableFmaMulPipe  ( EnableFmaMulPipe  ),
       .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
       .EnableFmaAddPipe  ( EnableFmaAddPipe  ),

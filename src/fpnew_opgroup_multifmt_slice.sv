@@ -25,6 +25,7 @@ module fpnew_opgroup_multifmt_slice #(
   parameter fpnew_pkg::divsqrt_unit_t DivSqrtSel     = fpnew_pkg::THMULTI,
   parameter logic                     EnableCastPipe = 1'b0,
   parameter logic                     EnableCastOvfPipe = 1'b0,
+  parameter logic                     EnableCastLzcPipe = 1'b0,
   parameter logic                     EnableFmaNormPipe  = 1'b0,
   parameter logic                     EnableFmaLzcPipe   = 1'b0,
   parameter int unsigned              NumPipeRegs    = 0,
@@ -390,6 +391,7 @@ FP8. Please use the PULP DivSqrt unit when in need of div/sqrt operations on FP8
           .NumPipeRegs    ( NumPipeRegs          ),
           .EnableCastPipe    ( EnableCastPipe       ),
           .EnableCastOvfPipe ( EnableCastOvfPipe    ),
+          .EnableCastLzcPipe ( EnableCastLzcPipe    ),
           .PipeConfig        ( PipeConfig           ),
           .TagType        ( TagType              ),
           .AuxType        ( logic [AUX_BITS-1:0] )

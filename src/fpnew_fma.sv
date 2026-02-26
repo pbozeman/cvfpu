@@ -18,6 +18,7 @@
 module fpnew_fma #(
   parameter fpnew_pkg::fp_format_e   FpFormat          = fpnew_pkg::fp_format_e'(0),
   parameter int unsigned             NumPipeRegs       = 0,
+  parameter logic                    EnableFmaMulPipe  = 1'b0,
   parameter logic                    EnableFmaExpPipe  = 1'b0,
   parameter logic                    EnableFmaAddPipe  = 1'b0,
   parameter logic                    EnableFmaNormPipe = 1'b0,
@@ -285,45 +286,121 @@ module fpnew_fma #(
     end
   end
 
-  // ---------------------------
-  // Initial exponent data path
-  // ---------------------------
-  logic signed [EXP_WIDTH-1:0] exponent_a, exponent_b, exponent_c;
-  logic signed [EXP_WIDTH-1:0] exponent_addend, exponent_product, exponent_difference;
-  logic signed [EXP_WIDTH-1:0] tentative_exponent;
-
-  // Zero-extend exponents into signed container - implicit width extension
-  assign exponent_a = signed'({1'b0, operand_a.exponent});
-  assign exponent_b = signed'({1'b0, operand_b.exponent});
-  assign exponent_c = signed'({1'b0, operand_c.exponent});
-
-  // Calculate internal exponents from encoded values. Real exponents are (ex = Ex - bias + 1 - nx)
-  // with Ex the encoded exponent and nx the implicit bit. Internal exponents stay biased.
-  assign exponent_addend = signed'(exponent_c + $signed({1'b0, ~info_c.is_normal})); // 0 as subnorm
-  // Biased product exponent is the sum of encoded exponents minus the bias.
-  assign exponent_product = (info_a.is_zero || info_b.is_zero)
-                            ? 2 - signed'(BIAS) // in case the product is zero, set minimum exp.
-                            : signed'(exponent_a + info_a.is_subnormal
-                                      + exponent_b + info_b.is_subnormal
-                                      - signed'(BIAS));
-  // Exponent difference is the addend exponent minus the product exponent
-  assign exponent_difference = exponent_addend - exponent_product;
-  // The tentative exponent will be the larger of the product or addend exponent
-  assign tentative_exponent = (exponent_difference > 0) ? exponent_addend : exponent_product;
-
   // ------------------
-  // Product data path (before exp_pipe - multiplier is independent of exponent calculation)
+  // Mantissa data path
   // ------------------
   logic [PRECISION_BITS-1:0]   mantissa_a, mantissa_b, mantissa_c;
-  logic [2*PRECISION_BITS-1:0] product;             // the p*p product is 2p bits wide
+  logic [2*PRECISION_BITS-1:0] product;
 
   // Add implicit bits to mantissae
   assign mantissa_a = {info_a.is_normal, operand_a.mantissa};
   assign mantissa_b = {info_b.is_normal, operand_b.mantissa};
   assign mantissa_c = {info_c.is_normal, operand_c.mantissa};
 
-  // Mantissa multiplier (a*b)
-  assign product = mantissa_a * mantissa_b;
+  // -----------------------
+  // Multiplier pipeline (optional)
+  // -----------------------
+  // This pipeline stage breaks up the long combinational path from operand
+  // conditioning (op_select + classification + implicit bit) through the DSP48
+  // multiplier input.
+  logic [0:EnableFmaMulPipe][PRECISION_BITS-1:0]   mul_pipe_mantissa_a_q;
+  logic [0:EnableFmaMulPipe][PRECISION_BITS-1:0]   mul_pipe_mantissa_b_q;
+  logic [0:EnableFmaMulPipe][PRECISION_BITS-1:0]   mul_pipe_mantissa_c_q;
+  fp_t                          [0:EnableFmaMulPipe] mul_pipe_operand_a_q;
+  fp_t                          [0:EnableFmaMulPipe] mul_pipe_operand_b_q;
+  fp_t                          [0:EnableFmaMulPipe] mul_pipe_operand_c_q;
+  fpnew_pkg::fp_info_t          [0:EnableFmaMulPipe] mul_pipe_info_a_q;
+  fpnew_pkg::fp_info_t          [0:EnableFmaMulPipe] mul_pipe_info_b_q;
+  fpnew_pkg::fp_info_t          [0:EnableFmaMulPipe] mul_pipe_info_c_q;
+  logic                         [0:EnableFmaMulPipe] mul_pipe_eff_sub_q;
+  logic                         [0:EnableFmaMulPipe] mul_pipe_tent_sign_q;
+  logic                         [0:EnableFmaMulPipe] mul_pipe_res_is_spec_q;
+  fp_t                          [0:EnableFmaMulPipe] mul_pipe_spec_res_q;
+  fpnew_pkg::status_t           [0:EnableFmaMulPipe] mul_pipe_spec_stat_q;
+  fpnew_pkg::roundmode_e        [0:EnableFmaMulPipe] mul_pipe_rnd_mode_q;
+  TagType                       [0:EnableFmaMulPipe] mul_pipe_tag_q;
+  logic                         [0:EnableFmaMulPipe] mul_pipe_mask_q;
+  AuxType                       [0:EnableFmaMulPipe] mul_pipe_aux_q;
+  logic                         [0:EnableFmaMulPipe] mul_pipe_valid_q;
+  logic [0:EnableFmaMulPipe] mul_pipe_ready;
+
+  // Input stage: connect from operand conditioning
+  assign mul_pipe_mantissa_a_q[0]  = mantissa_a;
+  assign mul_pipe_mantissa_b_q[0]  = mantissa_b;
+  assign mul_pipe_mantissa_c_q[0]  = mantissa_c;
+  assign mul_pipe_operand_a_q[0]   = operand_a;
+  assign mul_pipe_operand_b_q[0]   = operand_b;
+  assign mul_pipe_operand_c_q[0]   = operand_c;
+  assign mul_pipe_info_a_q[0]      = info_a;
+  assign mul_pipe_info_b_q[0]      = info_b;
+  assign mul_pipe_info_c_q[0]      = info_c;
+  assign mul_pipe_eff_sub_q[0]     = effective_subtraction;
+  assign mul_pipe_tent_sign_q[0]   = tentative_sign;
+  assign mul_pipe_res_is_spec_q[0] = result_is_special;
+  assign mul_pipe_spec_res_q[0]    = special_result;
+  assign mul_pipe_spec_stat_q[0]   = special_status;
+  assign mul_pipe_rnd_mode_q[0]    = inp_pipe_rnd_mode_q[NUM_INP_REGS];
+  assign mul_pipe_tag_q[0]         = inp_pipe_tag_q[NUM_INP_REGS];
+  assign mul_pipe_mask_q[0]        = inp_pipe_mask_q[NUM_INP_REGS];
+  assign mul_pipe_aux_q[0]         = inp_pipe_aux_q[NUM_INP_REGS];
+  assign mul_pipe_valid_q[0]       = inp_pipe_valid_q[NUM_INP_REGS];
+  // Input stage: Propagate pipeline ready signal to input pipe
+  assign inp_pipe_ready[NUM_INP_REGS] = mul_pipe_ready[0];
+
+  // Generate the register stages for mul_pipe
+  for (genvar i = 0; i < EnableFmaMulPipe; i++) begin : gen_mul_pipeline
+    logic reg_ena;
+    assign mul_pipe_ready[i] = mul_pipe_ready[i+1] | ~mul_pipe_valid_q[i+1];
+    `FFLARNC(mul_pipe_valid_q[i+1], mul_pipe_valid_q[i], mul_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+    assign reg_ena = mul_pipe_ready[i] & mul_pipe_valid_q[i];
+    `FFL(mul_pipe_mantissa_a_q[i+1],  mul_pipe_mantissa_a_q[i],  reg_ena, '0)
+    `FFL(mul_pipe_mantissa_b_q[i+1],  mul_pipe_mantissa_b_q[i],  reg_ena, '0)
+    `FFL(mul_pipe_mantissa_c_q[i+1],  mul_pipe_mantissa_c_q[i],  reg_ena, '0)
+    `FFL(mul_pipe_operand_a_q[i+1],   mul_pipe_operand_a_q[i],   reg_ena, '0)
+    `FFL(mul_pipe_operand_b_q[i+1],   mul_pipe_operand_b_q[i],   reg_ena, '0)
+    `FFL(mul_pipe_operand_c_q[i+1],   mul_pipe_operand_c_q[i],   reg_ena, '0)
+    `FFL(mul_pipe_info_a_q[i+1],      mul_pipe_info_a_q[i],      reg_ena, '0)
+    `FFL(mul_pipe_info_b_q[i+1],      mul_pipe_info_b_q[i],      reg_ena, '0)
+    `FFL(mul_pipe_info_c_q[i+1],      mul_pipe_info_c_q[i],      reg_ena, '0)
+    `FFL(mul_pipe_eff_sub_q[i+1],     mul_pipe_eff_sub_q[i],     reg_ena, '0)
+    `FFL(mul_pipe_tent_sign_q[i+1],   mul_pipe_tent_sign_q[i],   reg_ena, '0)
+    `FFL(mul_pipe_res_is_spec_q[i+1], mul_pipe_res_is_spec_q[i], reg_ena, '0)
+    `FFL(mul_pipe_spec_res_q[i+1],    mul_pipe_spec_res_q[i],    reg_ena, '0)
+    `FFL(mul_pipe_spec_stat_q[i+1],   mul_pipe_spec_stat_q[i],   reg_ena, '0)
+    `FFL(mul_pipe_rnd_mode_q[i+1],    mul_pipe_rnd_mode_q[i],    reg_ena, fpnew_pkg::RNE)
+    `FFL(mul_pipe_tag_q[i+1],         mul_pipe_tag_q[i],         reg_ena, TagType'('0))
+    `FFL(mul_pipe_mask_q[i+1],        mul_pipe_mask_q[i],        reg_ena, '0)
+    `FFL(mul_pipe_aux_q[i+1],         mul_pipe_aux_q[i],         reg_ena, AuxType'('0))
+  end
+
+  // ---------------------------
+  // Initial exponent data path (after mul_pipe)
+  // ---------------------------
+  logic signed [EXP_WIDTH-1:0] exponent_a, exponent_b, exponent_c;
+  logic signed [EXP_WIDTH-1:0] exponent_addend, exponent_product, exponent_difference;
+  logic signed [EXP_WIDTH-1:0] tentative_exponent;
+
+  // Zero-extend exponents into signed container - implicit width extension
+  assign exponent_a = signed'({1'b0, mul_pipe_operand_a_q[EnableFmaMulPipe].exponent});
+  assign exponent_b = signed'({1'b0, mul_pipe_operand_b_q[EnableFmaMulPipe].exponent});
+  assign exponent_c = signed'({1'b0, mul_pipe_operand_c_q[EnableFmaMulPipe].exponent});
+
+  // Calculate internal exponents from encoded values. Real exponents are (ex = Ex - bias + 1 - nx)
+  // with Ex the encoded exponent and nx the implicit bit. Internal exponents stay biased.
+  assign exponent_addend = signed'(exponent_c + $signed({1'b0, ~mul_pipe_info_c_q[EnableFmaMulPipe].is_normal})); // 0 as subnorm
+  // Biased product exponent is the sum of encoded exponents minus the bias.
+  assign exponent_product = (mul_pipe_info_a_q[EnableFmaMulPipe].is_zero || mul_pipe_info_b_q[EnableFmaMulPipe].is_zero)
+                            ? 2 - signed'(BIAS) // in case the product is zero, set minimum exp.
+                            : signed'(exponent_a + mul_pipe_info_a_q[EnableFmaMulPipe].is_subnormal
+                                      + exponent_b + mul_pipe_info_b_q[EnableFmaMulPipe].is_subnormal
+                                      - signed'(BIAS));
+  // Exponent difference is the addend exponent minus the product exponent
+  assign exponent_difference = exponent_addend - exponent_product;
+  // The tentative exponent will be the larger of the product or addend exponent
+  assign tentative_exponent = (exponent_difference > 0) ? exponent_addend : exponent_product;
+
+  // Mantissa multiplier (a*b) - uses registered mantissae from mul_pipe
+  assign product = mul_pipe_mantissa_a_q[EnableFmaMulPipe] * mul_pipe_mantissa_b_q[EnableFmaMulPipe];
 
   // -----------------------
   // Exponent pipeline (optional)
@@ -346,23 +423,23 @@ module fpnew_fma #(
   logic                          [0:EnableFmaExpPipe] exp_pipe_valid_q;
   logic [0:EnableFmaExpPipe] exp_pipe_ready;
 
-  // Input stage: First element of exp_pipe is taken from upstream logic
+  // Input stage: First element of exp_pipe is taken from upstream logic (mul_pipe)
   assign exp_pipe_exp_diff_q[0]    = exponent_difference;
   assign exp_pipe_tent_exp_q[0]    = tentative_exponent;
   assign exp_pipe_product_q[0]     = product;
-  assign exp_pipe_mantissa_c_q[0]  = mantissa_c;
-  assign exp_pipe_eff_sub_q[0]     = effective_subtraction;
-  assign exp_pipe_tent_sign_q[0]   = tentative_sign;
-  assign exp_pipe_res_is_spec_q[0] = result_is_special;
-  assign exp_pipe_spec_res_q[0]    = special_result;
-  assign exp_pipe_spec_stat_q[0]   = special_status;
-  assign exp_pipe_rnd_mode_q[0]    = inp_pipe_rnd_mode_q[NUM_INP_REGS];
-  assign exp_pipe_tag_q[0]         = inp_pipe_tag_q[NUM_INP_REGS];
-  assign exp_pipe_mask_q[0]        = inp_pipe_mask_q[NUM_INP_REGS];
-  assign exp_pipe_aux_q[0]         = inp_pipe_aux_q[NUM_INP_REGS];
-  assign exp_pipe_valid_q[0]       = inp_pipe_valid_q[NUM_INP_REGS];
-  // Input stage: Propagate pipeline ready signal to input pipe
-  assign inp_pipe_ready[NUM_INP_REGS] = exp_pipe_ready[0];
+  assign exp_pipe_mantissa_c_q[0]  = mul_pipe_mantissa_c_q[EnableFmaMulPipe];
+  assign exp_pipe_eff_sub_q[0]     = mul_pipe_eff_sub_q[EnableFmaMulPipe];
+  assign exp_pipe_tent_sign_q[0]   = mul_pipe_tent_sign_q[EnableFmaMulPipe];
+  assign exp_pipe_res_is_spec_q[0] = mul_pipe_res_is_spec_q[EnableFmaMulPipe];
+  assign exp_pipe_spec_res_q[0]    = mul_pipe_spec_res_q[EnableFmaMulPipe];
+  assign exp_pipe_spec_stat_q[0]   = mul_pipe_spec_stat_q[EnableFmaMulPipe];
+  assign exp_pipe_rnd_mode_q[0]    = mul_pipe_rnd_mode_q[EnableFmaMulPipe];
+  assign exp_pipe_tag_q[0]         = mul_pipe_tag_q[EnableFmaMulPipe];
+  assign exp_pipe_mask_q[0]        = mul_pipe_mask_q[EnableFmaMulPipe];
+  assign exp_pipe_aux_q[0]         = mul_pipe_aux_q[EnableFmaMulPipe];
+  assign exp_pipe_valid_q[0]       = mul_pipe_valid_q[EnableFmaMulPipe];
+  // Input stage: Propagate pipeline ready signal to mul_pipe
+  assign mul_pipe_ready[EnableFmaMulPipe] = exp_pipe_ready[0];
 
   // Generate the register stages for exp_pipe
   for (genvar i = 0; i < EnableFmaExpPipe; i++) begin : gen_exp_pipeline
@@ -1023,7 +1100,7 @@ module fpnew_fma #(
   assign mask_o          = out_pipe_mask_q[NUM_OUT_REGS];
   assign aux_o           = out_pipe_aux_q[NUM_OUT_REGS];
   assign out_valid_o     = out_pipe_valid_q[NUM_OUT_REGS];
-  assign busy_o          = (| {inp_pipe_valid_q, exp_pipe_valid_q, add_pipe_valid_q, mid_pipe_valid_q, lzc_pipe_valid_q, norm_pipe_valid_q, out_pipe_valid_q});
+  assign busy_o          = (| {inp_pipe_valid_q, mul_pipe_valid_q, exp_pipe_valid_q, add_pipe_valid_q, mid_pipe_valid_q, lzc_pipe_valid_q, norm_pipe_valid_q, out_pipe_valid_q});
 
   // Early valid_o signal. This is used for dispatching instructions for dual-issue processor.
   if (NUM_OUT_REGS > 0) begin
@@ -1044,6 +1121,9 @@ module fpnew_fma #(
   end else if (EnableFmaExpPipe) begin
     assign early_out_valid_o = |{exp_pipe_valid_q[EnableFmaExpPipe] & ~exp_pipe_ready[EnableFmaExpPipe],
                                  exp_pipe_valid_q[EnableFmaExpPipe-1]};
+  end else if (EnableFmaMulPipe) begin
+    assign early_out_valid_o = |{mul_pipe_valid_q[EnableFmaMulPipe] & ~mul_pipe_ready[EnableFmaMulPipe],
+                                 mul_pipe_valid_q[EnableFmaMulPipe-1]};
   end else if (NUM_INP_REGS > 0) begin
     assign early_out_valid_o = |{inp_pipe_valid_q[NUM_INP_REGS] & ~inp_pipe_ready[NUM_INP_REGS],
                                  inp_pipe_valid_q[NUM_INP_REGS-1]};

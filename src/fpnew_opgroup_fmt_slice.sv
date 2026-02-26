@@ -21,6 +21,7 @@ module fpnew_opgroup_fmt_slice #(
   parameter logic                    EnableVectors = 1'b1,
   parameter int unsigned             NumPipeRegs   = 0,
   parameter fpnew_pkg::pipe_config_t PipeConfig        = fpnew_pkg::BEFORE,
+  parameter logic                    EnableFmaMulPipe  = 1'b0,
   parameter logic                    EnableFmaExpPipe  = 1'b0,
   parameter logic                    EnableFmaAddPipe  = 1'b0,
   parameter logic                    EnableFmaNormPipe = 1'b0,
@@ -119,6 +120,7 @@ module fpnew_opgroup_fmt_slice #(
         fpnew_fma #(
           .FpFormat          ( FpFormat          ),
           .NumPipeRegs       ( NumPipeRegs       ),
+          .EnableFmaMulPipe  ( EnableFmaMulPipe  ),
           .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
           .EnableFmaAddPipe  ( EnableFmaAddPipe  ),
           .EnableFmaNormPipe ( EnableFmaNormPipe ),

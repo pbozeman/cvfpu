@@ -21,7 +21,9 @@ module fpnew_top #(
   parameter fpnew_pkg::divsqrt_unit_t       DivSqrtSel     = fpnew_pkg::THMULTI,
   // Enable pipeline between shifter and rounding in cast operation
   parameter logic                           EnableCastPipe    = 1'b0,
+  parameter logic                           EnableCastOvfPipe = 1'b0,
   // Enable pipeline between exponent calculation and addend shift in FMA operation
+  parameter logic                           EnableFmaMulPipe  = 1'b0,
   parameter logic                           EnableFmaExpPipe  = 1'b0,
   // Enable pipeline between barrel shift and wide adder in FMA operation
   parameter logic                           EnableFmaAddPipe  = 1'b0,
@@ -139,6 +141,8 @@ module fpnew_top #(
       .EnableVectors     ( EnableVectors     ),
       .DivSqrtSel        ( DivSqrtSel        ),
       .EnableCastPipe    ( EnableCastPipe    ),
+      .EnableCastOvfPipe ( EnableCastOvfPipe ),
+      .EnableFmaMulPipe  ( EnableFmaMulPipe  ),
       .EnableFmaExpPipe  ( EnableFmaExpPipe  ),
       .EnableFmaAddPipe  ( EnableFmaAddPipe  ),
       .EnableFmaNormPipe ( EnableFmaNormPipe ),

@@ -21,6 +21,7 @@ module fpnew_cast_multi #(
   // FPU configuration
   parameter int unsigned             NumPipeRegs = 0,
   parameter logic                    EnableCastPipe = 1'b0, // Pipeline between shifter and rounding
+  parameter logic                    EnableCastOvfPipe = 1'b0, // Pipeline between overflow detection and barrel shift
   parameter fpnew_pkg::pipe_config_t PipeConfig  = fpnew_pkg::BEFORE,
   parameter type                     TagType     = logic,
   parameter type                     AuxType     = logic,
@@ -486,11 +487,89 @@ module fpnew_cast_multi #(
     end
   end
 
+  // ----------------------------
+  // Overflow pipeline (optional, before barrel shift)
+  // ----------------------------
+  // This pipeline stage breaks up the long combinational path from overflow
+  // detection through barrel shift and round/sticky bit extraction.
+  logic                   [0:EnableCastOvfPipe]                              ovf_pipe_of_q;
+  logic                   [0:EnableCastOvfPipe]                              ovf_pipe_uf_q;
+  logic                   [0:EnableCastOvfPipe][INT_EXP_WIDTH-1:0]           ovf_pipe_final_exp_q;
+  logic                   [0:EnableCastOvfPipe][$clog2(INT_MAN_WIDTH+1)-1:0] ovf_pipe_denorm_shamt_q;
+  logic                   [0:EnableCastOvfPipe][2*INT_MAN_WIDTH:0]           ovf_pipe_preshift_mant_q;
+  logic                   [0:EnableCastOvfPipe]                              ovf_pipe_input_sign_q;
+  logic signed            [0:EnableCastOvfPipe][INT_EXP_WIDTH-1:0]           ovf_pipe_input_exp_q;
+  logic                   [0:EnableCastOvfPipe]                              ovf_pipe_dst_is_int_q;
+  logic                   [0:EnableCastOvfPipe]                              ovf_pipe_src_is_int_q;
+  logic                   [0:EnableCastOvfPipe]                              ovf_pipe_mant_zero_q;
+  logic                   [0:EnableCastOvfPipe]                              ovf_pipe_op_mod_q;
+  fpnew_pkg::roundmode_e  [0:EnableCastOvfPipe]                              ovf_pipe_rnd_mode_q;
+  fpnew_pkg::fp_format_e  [0:EnableCastOvfPipe]                              ovf_pipe_dst_fmt_q;
+  fpnew_pkg::int_format_e [0:EnableCastOvfPipe]                              ovf_pipe_int_fmt_q;
+  fpnew_pkg::fp_info_t    [0:EnableCastOvfPipe]                              ovf_pipe_info_q;
+  TagType                 [0:EnableCastOvfPipe]                              ovf_pipe_tag_q;
+  logic                   [0:EnableCastOvfPipe]                              ovf_pipe_mask_q;
+  AuxType                 [0:EnableCastOvfPipe]                              ovf_pipe_aux_q;
+  logic                   [0:EnableCastOvfPipe]                              ovf_pipe_valid_q;
+  logic [0:EnableCastOvfPipe] ovf_pipe_ready;
+
+  // Input stage: connect from cast_value outputs
+  assign ovf_pipe_of_q[0]             = of_before_round;
+  assign ovf_pipe_uf_q[0]             = uf_before_round;
+  assign ovf_pipe_final_exp_q[0]      = final_exp;
+  assign ovf_pipe_denorm_shamt_q[0]   = denorm_shamt;
+  assign ovf_pipe_preshift_mant_q[0]  = preshift_mant;
+  assign ovf_pipe_input_sign_q[0]     = input_sign_q;
+  assign ovf_pipe_input_exp_q[0]      = input_exp_q;
+  assign ovf_pipe_dst_is_int_q[0]     = dst_is_int_q;
+  assign ovf_pipe_src_is_int_q[0]     = src_is_int_q;
+  assign ovf_pipe_mant_zero_q[0]      = mant_is_zero_q;
+  assign ovf_pipe_op_mod_q[0]         = op_mod_q2;
+  assign ovf_pipe_rnd_mode_q[0]       = rnd_mode_q;
+  assign ovf_pipe_dst_fmt_q[0]        = dst_fmt_q2;
+  assign ovf_pipe_int_fmt_q[0]        = int_fmt_q2;
+  assign ovf_pipe_info_q[0]           = info_q;
+  assign ovf_pipe_tag_q[0]            = mid_pipe_tag_q[NUM_MID_REGS];
+  assign ovf_pipe_mask_q[0]           = mid_pipe_mask_q[NUM_MID_REGS];
+  assign ovf_pipe_aux_q[0]            = mid_pipe_aux_q[NUM_MID_REGS];
+  assign ovf_pipe_valid_q[0]          = mid_pipe_valid_q[NUM_MID_REGS];
+  // Input stage: Propagate pipeline ready signal to mid pipe
+  assign mid_pipe_ready[NUM_MID_REGS] = ovf_pipe_ready[0];
+
+  // Generate the register stages for ovf_pipe
+  for (genvar i = 0; i < EnableCastOvfPipe; i++) begin : gen_ovf_pipeline
+    logic reg_ena;
+    assign ovf_pipe_ready[i] = ovf_pipe_ready[i+1] | ~ovf_pipe_valid_q[i+1];
+    `FFLARNC(ovf_pipe_valid_q[i+1], ovf_pipe_valid_q[i], ovf_pipe_ready[i], flush_i, 1'b0, clk_i, rst_ni)
+    assign reg_ena = ovf_pipe_ready[i] & ovf_pipe_valid_q[i];
+    `FFL(ovf_pipe_of_q[i+1],             ovf_pipe_of_q[i],             reg_ena, '0)
+    `FFL(ovf_pipe_uf_q[i+1],             ovf_pipe_uf_q[i],             reg_ena, '0)
+    `FFL(ovf_pipe_final_exp_q[i+1],      ovf_pipe_final_exp_q[i],      reg_ena, '0)
+    `FFL(ovf_pipe_denorm_shamt_q[i+1],   ovf_pipe_denorm_shamt_q[i],   reg_ena, '0)
+    `FFL(ovf_pipe_preshift_mant_q[i+1],  ovf_pipe_preshift_mant_q[i],  reg_ena, '0)
+    `FFL(ovf_pipe_input_sign_q[i+1],     ovf_pipe_input_sign_q[i],     reg_ena, '0)
+    `FFL(ovf_pipe_input_exp_q[i+1],      ovf_pipe_input_exp_q[i],      reg_ena, '0)
+    `FFL(ovf_pipe_dst_is_int_q[i+1],     ovf_pipe_dst_is_int_q[i],     reg_ena, '0)
+    `FFL(ovf_pipe_src_is_int_q[i+1],     ovf_pipe_src_is_int_q[i],     reg_ena, '0)
+    `FFL(ovf_pipe_mant_zero_q[i+1],      ovf_pipe_mant_zero_q[i],      reg_ena, '0)
+    `FFL(ovf_pipe_op_mod_q[i+1],         ovf_pipe_op_mod_q[i],         reg_ena, '0)
+    `FFL(ovf_pipe_rnd_mode_q[i+1],       ovf_pipe_rnd_mode_q[i],       reg_ena, fpnew_pkg::RNE)
+    `FFL(ovf_pipe_dst_fmt_q[i+1],        ovf_pipe_dst_fmt_q[i],        reg_ena, fpnew_pkg::fp_format_e'(0))
+    `FFL(ovf_pipe_int_fmt_q[i+1],        ovf_pipe_int_fmt_q[i],        reg_ena, fpnew_pkg::int_format_e'(0))
+    `FFL(ovf_pipe_info_q[i+1],           ovf_pipe_info_q[i],           reg_ena, '0)
+    `FFL(ovf_pipe_tag_q[i+1],            ovf_pipe_tag_q[i],            reg_ena, TagType'('0))
+    `FFL(ovf_pipe_mask_q[i+1],           ovf_pipe_mask_q[i],           reg_ena, '0)
+    `FFL(ovf_pipe_aux_q[i+1],            ovf_pipe_aux_q[i],            reg_ena, AuxType'('0))
+  end
+
+  // ----------------------------
+  // Barrel shift and extraction (after ovf_pipe)
+  // ----------------------------
   localparam NUM_FP_STICKY  = 2 * INT_MAN_WIDTH - SUPER_MAN_BITS - 1; // removed mantissa, 1. and R
   localparam NUM_INT_STICKY = 2 * INT_MAN_WIDTH - MAX_INT_WIDTH; // removed int and R
 
-  // Mantissa adjustment shift
-  assign destination_mant = preshift_mant >> denorm_shamt;
+  // Mantissa adjustment shift - uses registered values from ovf_pipe
+  assign destination_mant = ovf_pipe_preshift_mant_q[EnableCastOvfPipe] >> ovf_pipe_denorm_shamt_q[EnableCastOvfPipe];
   // Extract final mantissa and round bit, discard the normal bit (for FP)
   assign {final_mant, fp_round_sticky_bits[1]} =
       destination_mant[2*INT_MAN_WIDTH-1-:SUPER_MAN_BITS+1];
@@ -500,7 +579,7 @@ module fpnew_cast_multi #(
   assign int_round_sticky_bits[0] = (| {destination_mant[NUM_INT_STICKY-1:0]});
 
   // select RS bits for destination operation
-  assign round_sticky_bits = dst_is_int_q ? int_round_sticky_bits : fp_round_sticky_bits;
+  assign round_sticky_bits = ovf_pipe_dst_is_int_q[EnableCastOvfPipe] ? int_round_sticky_bits : fp_round_sticky_bits;
 
   // ----------------------------
   // Shift pipeline (after shifter, before rounding)
@@ -550,30 +629,30 @@ module fpnew_cast_multi #(
   // Ready signal is combinatorial for all stages
   logic [0:EnableCastPipe] shift_pipe_ready;
 
-  // Input stage: First element of pipeline is taken from upstream logic
-  assign shift_pipe_final_exp_q[0]  = final_exp;
+  // Input stage: First element of pipeline is taken from upstream logic (ovf_pipe)
+  assign shift_pipe_final_exp_q[0]  = ovf_pipe_final_exp_q[EnableCastOvfPipe];
   assign shift_pipe_final_mant_q[0] = final_mant;
   assign shift_pipe_final_int_q[0]  = final_int;
   assign shift_pipe_fp_rs_q[0]      = fp_round_sticky_bits;
   assign shift_pipe_int_rs_q[0]     = int_round_sticky_bits;
-  assign shift_pipe_of_q[0]         = of_before_round;
-  assign shift_pipe_uf_q[0]         = uf_before_round;
-  assign shift_pipe_input_sign_q[0] = input_sign_q;
-  assign shift_pipe_input_exp_q[0]  = input_exp_q;
-  assign shift_pipe_dst_is_int_q[0] = dst_is_int_q;
-  assign shift_pipe_src_is_int_q[0] = src_is_int_q;
-  assign shift_pipe_mant_zero_q[0]  = mant_is_zero_q;
-  assign shift_pipe_op_mod_q[0]     = op_mod_q2;
-  assign shift_pipe_rnd_mode_q[0]   = rnd_mode_q;
-  assign shift_pipe_dst_fmt_q[0]    = dst_fmt_q2;
-  assign shift_pipe_int_fmt_q[0]    = int_fmt_q2;
-  assign shift_pipe_info_q[0]       = info_q;
-  assign shift_pipe_tag_q[0]        = mid_pipe_tag_q[NUM_MID_REGS];
-  assign shift_pipe_mask_q[0]       = mid_pipe_mask_q[NUM_MID_REGS];
-  assign shift_pipe_aux_q[0]        = mid_pipe_aux_q[NUM_MID_REGS];
-  assign shift_pipe_valid_q[0]      = mid_pipe_valid_q[NUM_MID_REGS];
-  // Input stage: Propagate pipeline ready signal to mid pipe
-  assign mid_pipe_ready[NUM_MID_REGS] = shift_pipe_ready[0];
+  assign shift_pipe_of_q[0]         = ovf_pipe_of_q[EnableCastOvfPipe];
+  assign shift_pipe_uf_q[0]         = ovf_pipe_uf_q[EnableCastOvfPipe];
+  assign shift_pipe_input_sign_q[0] = ovf_pipe_input_sign_q[EnableCastOvfPipe];
+  assign shift_pipe_input_exp_q[0]  = ovf_pipe_input_exp_q[EnableCastOvfPipe];
+  assign shift_pipe_dst_is_int_q[0] = ovf_pipe_dst_is_int_q[EnableCastOvfPipe];
+  assign shift_pipe_src_is_int_q[0] = ovf_pipe_src_is_int_q[EnableCastOvfPipe];
+  assign shift_pipe_mant_zero_q[0]  = ovf_pipe_mant_zero_q[EnableCastOvfPipe];
+  assign shift_pipe_op_mod_q[0]     = ovf_pipe_op_mod_q[EnableCastOvfPipe];
+  assign shift_pipe_rnd_mode_q[0]   = ovf_pipe_rnd_mode_q[EnableCastOvfPipe];
+  assign shift_pipe_dst_fmt_q[0]    = ovf_pipe_dst_fmt_q[EnableCastOvfPipe];
+  assign shift_pipe_int_fmt_q[0]    = ovf_pipe_int_fmt_q[EnableCastOvfPipe];
+  assign shift_pipe_info_q[0]       = ovf_pipe_info_q[EnableCastOvfPipe];
+  assign shift_pipe_tag_q[0]        = ovf_pipe_tag_q[EnableCastOvfPipe];
+  assign shift_pipe_mask_q[0]       = ovf_pipe_mask_q[EnableCastOvfPipe];
+  assign shift_pipe_aux_q[0]        = ovf_pipe_aux_q[EnableCastOvfPipe];
+  assign shift_pipe_valid_q[0]      = ovf_pipe_valid_q[EnableCastOvfPipe];
+  // Input stage: Propagate pipeline ready signal to ovf_pipe
+  assign ovf_pipe_ready[EnableCastOvfPipe] = shift_pipe_ready[0];
 
   // Generate the register stages
   for (genvar i = 0; i < EnableCastPipe; i++) begin : gen_shift_pipeline
@@ -954,7 +1033,7 @@ module fpnew_cast_multi #(
   assign mask_o          = out_pipe_mask_q[NUM_OUT_REGS];
   assign aux_o           = out_pipe_aux_q[NUM_OUT_REGS];
   assign out_valid_o     = out_pipe_valid_q[NUM_OUT_REGS];
-  assign busy_o          = (| {inp_pipe_valid_q, mid_pipe_valid_q, shift_pipe_valid_q, out_pipe_valid_q});
+  assign busy_o          = (| {inp_pipe_valid_q, mid_pipe_valid_q, ovf_pipe_valid_q, shift_pipe_valid_q, out_pipe_valid_q});
 
   // Early valid_o signal. This is used for dispatching instructions for dual-issue processor.
   if (NUM_OUT_REGS > 0) begin
@@ -963,6 +1042,9 @@ module fpnew_cast_multi #(
   end else if (EnableCastPipe > 0) begin
     assign early_out_valid_o = |{shift_pipe_valid_q[EnableCastPipe] & ~shift_pipe_ready[EnableCastPipe],
                                  shift_pipe_valid_q[EnableCastPipe-1]};
+  end else if (EnableCastOvfPipe > 0) begin
+    assign early_out_valid_o = |{ovf_pipe_valid_q[EnableCastOvfPipe] & ~ovf_pipe_ready[EnableCastOvfPipe],
+                                 ovf_pipe_valid_q[EnableCastOvfPipe-1]};
   end else if (NUM_MID_REGS > 0) begin
     assign early_out_valid_o = |{mid_pipe_valid_q[NUM_MID_REGS] & ~mid_pipe_ready[NUM_MID_REGS],
                                  mid_pipe_valid_q[NUM_MID_REGS-1]};
